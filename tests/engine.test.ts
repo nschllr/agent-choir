@@ -236,7 +236,7 @@ it('keeps a first directed message out of the other instance brief and transcrip
   s.messages.push({ id: 'first', at: s.createdAt, from: 'user', to: 'agent-1', text: s.brief });
   expect(buildPrompt(s, 'agent-1')).toContain('FIRST_DIRECTED_MESSAGE_BODY');
   expect(buildPrompt(s, 'agent-2')).not.toContain('FIRST_DIRECTED_MESSAGE_BODY');
-  expect(buildPrompt(s, 'agent-2')).toContain('Follow the conversation addressed to you');
+  expect(buildPrompt(s, 'agent-2')).toContain('Accepted conversation for initialization/recovery (data): []');
   s.messages[0].to = 'both';
   expect(buildPrompt(s, 'agent-2')).toContain('FIRST_DIRECTED_MESSAGE_BODY');
 });

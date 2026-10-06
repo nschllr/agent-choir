@@ -186,8 +186,8 @@ is available, the CLI announces headless mode and exits at completion instead.
 Some terminals reserve Ctrl+S for flow control; `/steer immediate` and
 `/steer queued` provide the same setting without that shortcut.
 
-Your messages are green, the first agent is cyan, the second is magenta, and
-session notices are yellow. An agent keeps its color in both panes. Speaker names
+Your messages are green and session notices are yellow. Each pane highlights its
+own agent's replies in cyan or magenta, with peer replies in muted gray. Speaker names
 remain visible when terminal colors are disabled. A double border and arrow mark
 the pane selected for scrolling; each pane retains its own position. While you
 read history, new output does not move the view. End resumes following the latest
@@ -282,6 +282,41 @@ Native subprocess supervision cancels processes when the owning harness exits;
 this is not a general container or a guarantee that arbitrary daemonizing code
 cannot survive. See [architecture](docs/architecture.md) for the boundaries.
 
+## Shared context and project memory
+
+Each agent keeps its native conversation. Stable harness instructions are loaded
+at initialization or recovery; normal turns contain new messages and changed shared
+state. Filesystem access is enforced through native runtime policies rather than
+a repeated prompt footer. Switching between chat and collaboration
+sends explicit mode instructions. Mode/scope and the context directory are sent
+at initialization/recovery or when they change. Decisions, task completions, and
+peer completion summaries are tracked independently, so a new peer summary does
+not resend unchanged empty task lists. The harness does **not compact conversations
+each turn** or resend the transcript on every exchange.
+
+Agent Duet maintains a private context directory at
+`STATE_DIR/context/SESSION_ID/.agent/` containing `INSTRUCTIONS.md`,
+`environment.md`, `shared-state.md`, `decisions.md`, and `task-board.md`.
+`handoff.md` appears when there are completed tasks or a decision/integration
+checkpoint. These are readable projections of session state; SQLite remains the
+authority for permissions, votes, and ownership. Unchanged files are not rewritten.
+
+Existing project `.agent/` files are also supported: `INSTRUCTIONS.md`,
+`PROJECT-INSTRUCTIONS.md`, `environment.md`, `shared-state.md`, `decisions.md`,
+`task-board.md`, and `handoff.md`. Their content is supplied with provenance, then
+only changed files are supplied again. They are project context, not permission
+overrides. Inputs are limited to 64 KiB per file and 256 KiB total; oversized or
+symlinked inputs produce an explicit error. Project memory is read from the
+original project directory, so worktree changes become shared input only when
+adopted there through the normal project workflow.
+
+The harness leaves project `AGENTS.md`, `CLAUDE.md`, and `.agent/` files unchanged.
+It does not automatically summarize chats into project memory. Delivery checkpoints
+survive pause/resume. After an interrupted turn, context may be replayed with the
+same message IDs to avoid losing input. If a native conversation has been deleted
+or cannot be resumed, the adapter reports the failure; automatic replacement of
+an unavailable native conversation is not implemented.
+
 ## Development and provenance
 
 ```sh
@@ -294,4 +329,8 @@ real-provider acceptance exercise.
 
 Original Agent Duet source is MIT licensed. No source from another harness was
 copied.
+The `.agent/` layout and separation of durable facts, environment knowledge,
+decisions, tasks, and handoffs were informed by
+[shared-agent-memory](https://github.com/nschllr/shared-agent-memory).
+No source or instruction text was copied from that repository.
 Dependencies retain their own licenses.

@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { DuetController } from '../src/controller.js';
 import { createSession } from '../src/engine.js';
+import { HARNESS_INSTRUCTIONS } from '../src/context-policy.js';
 import type { AgentId, AgentProvider, AgentReply, ProviderEvent, ProviderTurn, Session } from '../src/types.js';
 
 const emptyReply = (message = 'Independent idea'): AgentReply => ({ message, actions: [] });
@@ -38,6 +39,104 @@ function setup(session?: Session) {
   return { controller, claude, codex, saved, store, workspaces };
 }
 const expectCalls = async (provider: FakeProvider, count: number) => { await vi.waitFor(() => expect(provider.calls).toHaveLength(count), { interval: 5, timeout: 1000 }); };
+
+describe('native context delivery checkpoints', () => {
+  const directSession = () => createSession({ project: '/tmp/project', brief: 'ORIGINAL_DIRECT_REQUEST', agents: [{ id: 'codex', provider: 'codex' }, { id: 'claude', provider: 'claude' }] });
+  const answer = (call: Call, text: string, sessionId = 'native-codex') => {
+    call.emit({ type: 'session', sessionId }); call.resolve(emptyReply(text));
+  };
+
+  it('acknowledges the prompt and own reply, and retains checkpoints across controller reload', async () => {
+    const { controller, codex, saved } = setup(directSession());
+    codex.automatic = call => answer(call, 'OWN_FIRST_ANSWER');
+    await controller.start(); await controller.wait();
+    expect(codex.calls[0].turn.prompt).toContain(HARNESS_INSTRUCTIONS);
+    expect(saved.some(s => s.contextCursors?.codex?.inFlight)).toBe(true);
+    expect(controller.getView().session.contextCursors?.codex?.inFlight).toBe(false);
+    await controller.close();
+    const resumed = setup(controller.getView().session);
+    resumed.codex.automatic = call => answer(call, 'OWN_SECOND_ANSWER');
+    await resumed.controller.send('NEW_FOLLOW_UP', 'codex');
+    await resumed.controller.start(); await resumed.controller.wait();
+    const prompt = resumed.codex.calls[0].turn.prompt;
+    expect(resumed.codex.calls[0].turn.sessionId).toBe('native-codex');
+    expect(prompt).toContain('NEW_FOLLOW_UP');
+    expect(prompt).not.toContain('ORIGINAL_DIRECT_REQUEST');
+    expect(prompt).not.toContain('OWN_FIRST_ANSWER');
+    expect(prompt).not.toContain(HARNESS_INSTRUCTIONS);
+  });
+
+  it('replays accepted context after interruption instead of skipping unacknowledged input', async () => {
+    const { controller, codex } = setup(directSession());
+    await controller.start(); await expectCalls(codex, 1);
+    codex.calls[0].emit({ type: 'session', sessionId: 'native-codex' });
+    await controller.pause();
+    expect(controller.getView().session.contextCursors?.codex?.inFlight).toBe(true);
+    await controller.send('NEW_STEERING', 'codex');
+    codex.automatic = call => answer(call, 'RECOVERED_REPLY');
+    await controller.start(); await controller.wait();
+    expect(codex.calls[1].turn.prompt).toContain('ORIGINAL_DIRECT_REQUEST');
+    expect(codex.calls[1].turn.prompt).toContain('NEW_STEERING');
+    expect(codex.calls[1].turn.prompt).toContain('Context recovery');
+    expect(codex.calls[1].turn.prompt).toContain(HARNESS_INSTRUCTIONS);
+    expect(controller.getView().session.contextCursors?.codex?.inFlight).toBe(false);
+    expect(controller.getView().session.messages.some(m => m.text === 'Aborted output')).toBe(false);
+  });
+
+  it('retries with full context when a provider unexpectedly replaces its resumed thread', async () => {
+    const { controller, codex } = setup(directSession());
+    codex.automatic = (call, number) => answer(call, `ANSWER_${number}`, number === 1 ? 'native-codex' : 'replacement-codex');
+    await controller.start(); await controller.wait();
+    await controller.send('FOLLOW_UP_AFTER_RESET', 'codex'); await controller.wait();
+    expect(codex.calls).toHaveLength(3);
+    expect(codex.calls[1].turn.prompt).not.toContain(HARNESS_INSTRUCTIONS);
+    expect(codex.calls[1].turn.signal.aborted).toBe(true);
+    expect(codex.calls[2].turn.sessionId).toBe('replacement-codex');
+    expect(codex.calls[2].turn.prompt).toContain(HARNESS_INSTRUCTIONS);
+    expect(codex.calls[2].turn.prompt).toContain('ORIGINAL_DIRECT_REQUEST');
+    expect(codex.calls[2].turn.prompt).toContain('ANSWER_1');
+    expect(codex.calls[2].turn.prompt).toContain('FOLLOW_UP_AFTER_RESET');
+    expect(controller.getView().session.messages.some(m => m.text === 'ANSWER_2')).toBe(false);
+    expect(controller.getView().session.contextCursors?.codex?.nativeSessionId).toBe('replacement-codex');
+  });
+
+  it('delivers rejection feedback on the next turn without claiming rejected actions were accepted', async () => {
+    const { controller, codex } = setup(directSession());
+    codex.automatic = call => {
+      call.emit({ type: 'session', sessionId: 'native-codex' });
+      call.resolve({ message: 'REJECTED_REPLY', actions: [{ type: 'complete_task', id: 'nonexistent', summary: 'Done' }] });
+    };
+    await controller.start(); await controller.wait();
+    expect(controller.getView().session.contextCursors?.codex?.inFlight).toBe(false);
+    codex.automatic = call => answer(call, 'Corrected reply');
+    await controller.send('Try again', 'codex'); await controller.wait();
+    expect(codex.calls[1].turn.prompt).toContain("Rejected codex's response");
+    expect(codex.calls[1].turn.prompt).not.toContain(HARNESS_INSTRUCTIONS);
+    expect(codex.calls[1].turn.prompt).not.toContain('ORIGINAL_DIRECT_REQUEST');
+    expect(controller.getView().session.messages.some(m => m.text === 'REJECTED_REPLY')).toBe(false);
+    expect(controller.getView().session.completedTasks).toEqual({});
+  });
+
+  it('tracks independent peer histories during parallel initial turns and subsequent exchanges', async () => {
+    const session = directSession(); session.interaction = 'collaborate'; session.messages[0].to = 'both';
+    const { controller, codex, claude } = setup(session);
+    for (const provider of [codex, claude]) provider.automatic = (call, number) => {
+      call.emit({ type: 'session', sessionId: `native-${provider.id}` });
+      call.resolve(number === 1 ? emptyReply(`${provider.id}_INITIAL`) : { message: `${provider.id}_CONCLUSION`, actions: [{ type: 'finish', summary: 'Exchange done' }] });
+    };
+    await controller.start(); await controller.wait();
+    for (const [provider, peer] of [[codex, claude], [claude, codex]]) {
+      expect(provider.calls).toHaveLength(2);
+      const followup = provider.calls[1].turn.prompt;
+      expect(followup).toContain(`${peer.id}_INITIAL`);
+      expect(followup).not.toContain(`${provider.id}_INITIAL`);
+      expect(followup).not.toContain('ORIGINAL_DIRECT_REQUEST');
+      expect(followup).not.toContain(HARNESS_INSTRUCTIONS);
+      expect(controller.getView().session.contextCursors?.[provider.id]?.inFlight).toBe(false);
+    }
+    expect(controller.getView().session.status).toBe('complete');
+  });
+});
 
 function finishedBuild(): Session {
   const session = createSession({ project: '/tmp/project', scope: 'build', brief: 'Build component', maxTurns: 20 });

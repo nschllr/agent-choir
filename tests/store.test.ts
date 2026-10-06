@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { SessionStore } from '../src/store.js';
 import { createSession } from '../src/engine.js';
+import { buildContextDelivery } from '../src/context-delivery.js';
 
 const directories: string[] = [];
 const stores: SessionStore[] = [];
@@ -120,4 +121,27 @@ it('persists chat routing and rejects malformed recipient queues', () => {
   delete old.pendingRecipients;
   store.save(old);
   expect(store.load(old.id)).toEqual(old);
+});
+
+it('preserves in-flight delivery checkpoints and rejects corrupt cursor records', () => {
+  const { store, session } = fixture();
+  const { cursor } = buildContextDelivery(session, 'codex');
+  session.contextCursors = { codex: cursor };
+  store.save(session);
+  expect(store.load(session.id)?.contextCursors).toEqual({ codex: cursor });
+  for (const contextCursors of [[], { outsider: cursor }, { codex: null },
+    { codex: { ...cursor, state: 'bad-hash' } },
+    { codex: { ...cursor, state: {} } },
+    { codex: { ...cursor, state: { decisions: 'a'.repeat(64), completedTasks: 'a'.repeat(64), finished: 'invalid' } } },
+    { codex: { ...cursor, contextDirectory: 42 } },
+    { codex: { ...cursor, messages: { missing: 3 } } },
+    { codex: { ...cursor, memory: [] } },
+    { codex: { ...cursor, inFlight: 'false' } },
+  ]) expect(() => store.save({ ...session, contextCursors } as typeof session)).toThrow('Invalid session snapshot');
+  session.contextCursors.codex = { ...cursor, state: 'a'.repeat(64) };
+  store.save(session);
+  expect(store.load(session.id)?.contextCursors).toEqual(session.contextCursors);
+  delete session.contextCursors;
+  store.save(session);
+  expect(store.load(session.id)).toEqual(session);
 });

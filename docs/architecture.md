@@ -23,7 +23,10 @@ Ink terminal / headless CLI / attached terminal
 | `types.ts` | Shared session, provider, controller, and workspace contracts |
 | `agents.ts` | Provider-independent instance identities, roster validation and display names |
 | `protocol.ts` | Structured response schema and strict runtime validation |
-| `engine.ts` | Immutable decision transitions, task graph validation, completion gates, prompts |
+| `engine.ts` | Immutable decision transitions, task graph validation, completion gates |
+| `context-policy.ts` | Stable harness instructions, versioned for native bootstrap and recovery |
+| `context-delivery.ts` | Per-instance message/state deltas tied to a native conversation |
+| `context-memory.ts` | Project memory reader and private session `.agent/` projections |
 | `controller.ts` | Scheduling, steering, cancellation, limits, persistence, integration checkpoint |
 | `providers/` | Native CLI protocol adapters, output decoding, process supervision |
 | `workspaces.ts` | Durable per-agent worktrees, task finalization, dependency and candidate integration |
@@ -175,6 +178,46 @@ and reported instead of being reset or deleted.
 
 ## Persistence and cancellation
 
+Native conversations retain the previous prompts, tool results, and replies.
+Each instance has a persisted delivery cursor containing its native session ID,
+protocol version, hashes of delivered messages, configuration, shared state, and
+project memory files. A normal turn sends only unseen/changed visible messages and
+changed state sections. Filesystem access is passed to the native provider as
+runtime policy, without a repeated prompt footer. Decisions, completed tasks, and peer
+completion summaries have separate hashes. Clearing a previously nonempty section
+sends its empty replacement; changing one section does not resend the others.
+Mode/scope and the context directory are sent on initialization/recovery or change.
+Legacy combined state hashes upgrade once without replaying known conversation.
+The offline demo receives mode/scope and shared state each turn because it has no
+durable native conversation. An accepted own reply is marked known without
+sending it back to its author. Sharing direct history when collaboration starts
+delivers previously private messages to the newly authorized peer once. Mode and
+roster changes are explicit; they do not require a transcript replay.
+
+Before a native call, its cursor is saved with `inFlight: true`. Acceptance marks
+it acknowledged only after generation-ticket checks and task finalization. A
+rejected action produces correction feedback without accepting the action. An
+interruption leaves the cursor uncertain: the next call bootstraps stable rules,
+current authoritative state, and all accepted visible messages, with their IDs.
+Missing/legacy cursors, protocol-version changes, or replaced native IDs also
+bootstrap. An unexpected ID change during a delta turn cancels that result and
+retries with full context. This is conservative replay, not exactly-once delivery
+or per-turn compaction. Native context management remains provider-owned; the
+harness does not detect native compaction. Failure to resume an unavailable native
+ID is reported rather than silently clearing it or starting a new conversation.
+
+`ContextMemory` writes generated files under `STATE_DIR/context/SESSION_ID/.agent/`
+and reads a fixed set of existing project `.agent/` files. It does not modify
+project entry points or worktrees. Private generated files are changed only when
+their content changes, using serialized snapshot generation and atomic file
+replacement. Decisions and task boards are SQLite projections, never inputs to
+authorization. Handoffs record concrete completions or blockers, not a fresh
+summary after every chat turn. Project memory is provenance-labelled task data
+and cannot override runtime policy. Symlinks/nonregular inputs and oversized
+memory files fail explicitly. Agents receive the stable protocol inline at
+bootstrap, so correctness does not depend on either CLI discovering an external
+`AGENTS.md` or `CLAUDE.md` automatically.
+
 SQLite saves whole validated session snapshots. The database uses WAL and full
 synchronization. State directory permissions are private to the current user;
 snapshots are not encrypted. Exclusive ownership locks stop concurrent controllers
@@ -202,3 +245,10 @@ server, Windows support, automated cost accounting, or provider compatibility ma
 ## Provenance
 
 This implementation is original MIT source.
+
+The `.agent/` memory layout was informed by
+[shared-agent-memory](https://github.com/nschllr/shared-agent-memory/tree/ccea8646488a2df3d9dff4dfb2c7ecc2330c38f9).
+We reviewed its small provider entry points and separation of instructions,
+environment, shared state, decisions, tasks, and handoffs. The implementation and
+instruction text here are original; that repository's turn-cleanup workflow is
+not adopted, and no per-turn compaction is introduced.

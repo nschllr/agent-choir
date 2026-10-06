@@ -31,6 +31,8 @@ and remains unavailable in read-only sessions.
 | Controller | Independent initial thoughts, peer scheduling, limits, cancellation and steering, persistence, integration checkpoint |
 | Workspaces | Original checkout preservation, dirty-repository refusal, committed dependencies, finalized snapshots, conflict aborts, crash reconciliation |
 | Store | Durable snapshots, private storage, session ownership, interrupted-run recovery |
+| Context delivery | Incremental messages and independent state sections, private routing, mode/roster/path updates, legacy cursor migration, persisted acknowledgements, interrupted/replaced native context recovery |
+| Context memory | Original file preservation, provenance, stable content updates, concrete handoffs, overlapping snapshots, input bounds and symlink rejection |
 | Providers/streaming | JSON protocol handling, visible text decoding, native configuration guards, subprocess cleanup |
 | Background | Local worker transport, attachment, bounded request handling |
 | Terminal UI | Panes, composer and recipient controls, activity and checkpoint rendering |
@@ -179,6 +181,22 @@ provider calls 12 ms apart. Codex 2 completed after 4.02 seconds and Codex 1 aft
 contained two distinct native session IDs, two turns, and an empty pending queue.
 The test asserted that both calls started before either completed. These timings
 measure this one smoke test, not expected provider latency.
+
+### Observed incremental-context smoke test — 2026-10-07
+
+Codex and Claude Haiku 4.5 each received a test token in a direct message, then
+correctly recalled it when a follow-up omitted the token and prior history. Both
+native session IDs remained unchanged. Switching to collaboration then completed
+three autonomous turns with both agents finishing. Seven native turns total ran
+read-only; Claude was pinned to `claude-haiku-4-5-20251001` throughout.
+
+Measured prompt lengths were 5,635/5,636 characters for initialization, 504 for
+each direct follow-up, and 941–1,520 for collaboration turns. All five follow-up
+prompts omitted the stable protocol. These measurements establish reduced
+injected prompt size and retained native history for this small example; they
+are not token billing or latency measurements. Native resume across a change
+from the original directory to a build worktree still needs a dedicated test of
+the incremental delivery path.
 
 ## Release boundaries
 

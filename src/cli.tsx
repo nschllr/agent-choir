@@ -8,6 +8,7 @@ import { join, resolve } from 'node:path';
 import { execFileSync, spawn } from 'node:child_process';
 import { createSession } from './engine.js';
 import { SessionStore } from './store.js';
+import { ContextMemory } from './context-memory.js';
 import { DuetController } from './controller.js';
 import { GitWorkspaceManager } from './workspaces.js';
 import { DemoProvider } from './demo.js';
@@ -141,7 +142,7 @@ async function main(): Promise<void> {
       const native = agent.provider === 'claude' ? new ClaudeProvider() : new CodexProvider();
       return { id: agent.id, run: native.run.bind(native), dispose: native.dispose.bind(native) };
     };
-    controller = new DuetController(session, Object.fromEntries(sessionAgents(session).map(agent => [agent.id, factory(agent)])), store, new GitWorkspaceManager(stateDir), factory);
+    controller = new DuetController(session, Object.fromEntries(sessionAgents(session).map(agent => [agent.id, factory(agent)])), store, new GitWorkspaceManager(stateDir), factory, new ContextMemory(stateDir));
     const launchWorker = async () => {
       const autoStart = values.detach || controller!.getView().session.status === 'running';
       await controller!.close(); release?.(); release = undefined; store.close();

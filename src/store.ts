@@ -29,6 +29,16 @@ function validate(value: unknown): asserts value is Session {
   for (const key of ['turns', 'maxTurns', 'maxMinutes', 'elapsedMs']) if (typeof value[key] !== 'number' || !Number.isFinite(value[key]) || value[key] < 0) return invalid();
   if (!stringRecord(value.completedTasks) || !stringRecord(value.finished) || !stringRecord(value.providerSessions)) return invalid();
   for (const key of ['finished', 'providerSessions']) if (!Object.keys(value[key] as Record<string, unknown>).every(agent => agents.includes(agent))) return invalid();
+  if (value.contextCursors !== undefined) {
+    if (!isRecord(value.contextCursors)) return invalid();
+    for (const [agent, cursor] of Object.entries(value.contextCursors)) {
+      if (!agents.includes(agent) || !isRecord(cursor) || !['nativeSessionId', 'version', 'configuration'].every(key => typeof cursor[key] === 'string') || typeof cursor.inFlight !== 'boolean' || !stringRecord(cursor.messages) || !stringRecord(cursor.memory)) return invalid();
+      if (cursor.contextDirectory !== undefined && typeof cursor.contextDirectory !== 'string') return invalid();
+      if (typeof cursor.state !== 'string' && (!isRecord(cursor.state) || Object.keys(cursor.state).length !== 3 || !['decisions', 'completedTasks', 'finished'].every(key => Object.hasOwn(cursor.state as object, key)))) return invalid();
+      const stateHashes = typeof cursor.state === 'string' ? [cursor.state] : Object.values(cursor.state as Record<string, unknown>);
+      if (![cursor.configuration, ...stateHashes, ...Object.values(cursor.messages as Record<string, string>), ...Object.values(cursor.memory as Record<string, string>)].every(hash => typeof hash === 'string' && /^[0-9a-f]{64}$/.test(hash))) return invalid();
+    }
+  }
   if (value.providerModels !== undefined && (!isRecord(value.providerModels) || !Object.entries(value.providerModels).every(([provider, model]) => member(provider, ['claude', 'codex']) && typeof model === 'string' && /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$/.test(model)))) return invalid();
   if (value.models !== undefined && (!isRecord(value.models) || !Object.entries(value.models).every(([agent, model]) => member(agent, agents) && typeof model === 'string' && /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$/.test(model)))) return invalid();
   if (value.awaitingInput !== undefined && typeof value.awaitingInput !== 'boolean') return invalid();

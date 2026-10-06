@@ -21,6 +21,15 @@ decisions; the coordinator enforces the recorded outcome.
 - [x] Persist rosters and keep native sessions, votes, tasks and worktrees per instance.
 - [x] Exercise independent same-provider conversations with a bounded live test.
 
+## Persistent context and incremental delivery
+
+- [x] Store stable protocol and session projections in a private `.agent/` directory.
+- [x] Read existing project memory with provenance without rewriting project entry points.
+- [x] Persist per-instance delivery checkpoints; send new messages and changed state on normal turns.
+- [x] Replay accepted context on interruption or native-ID replacement; retain all harness history.
+- [x] Keep native conversation history; do not compact each turn or create no-op handoffs.
+- [x] Verify native recall and collaboration with Codex and Claude Haiku.
+
 ## Sequence
 
 1. **Foundation and protocol** — TypeScript, shared provider interface, versioned
@@ -72,7 +81,8 @@ Natural-language agreement alone never changes permissions.
 ## Initial implementation boundaries and next evaluation
 
 - Validation: `npm run check` passes TypeScript checking, production compilation,
-  and 170 offline tests, including independent anchored scrolling, Unicode wrapping,
+  and 200 offline tests, including incremental context, recovery checkpoints,
+  project memory, independent anchored scrolling, Unicode wrapping,
   collaboration mode selection without submission,
   default/read-only permissions, empty startup, agent picker, same-provider
   instance isolation, addressed-only chat, explicit collaboration, named routing,

@@ -5,7 +5,7 @@ export class DemoProvider implements AgentProvider {
   constructor(readonly id: AgentId, private delayMs = 18) {}
   async run(turn: ProviderTurn, emit: (event: ProviderEvent) => void): Promise<AgentReply> {
     const step = Number(turn.sessionId?.split(':').at(-1) ?? 0);
-    const reply: AgentReply = turn.prompt.includes('This is a direct chat.')
+    const reply: AgentReply = turn.prompt.includes('Mode: chat.')
       ? { message: 'Hello! What would you like to work on? [Offline simulation]', actions: [] }
       : this.id === 'claude' || this.id === 'codex' ? this.reply(step) : this.interactiveReply(turn);
     emit({ type: 'activity', text: 'Offline simulation · no model or shell calls' });

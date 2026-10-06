@@ -24,12 +24,24 @@ export type CollaborationAction =
 export interface AgentReply { message: string; actions: CollaborationAction[]; }
 export interface Message { id: string; at: string; from: AgentId | 'user' | 'system'; to: Recipient; text: string; }
 export interface Activity { id: string; at: string; agent: AgentId; kind: 'tool' | 'status' | 'error'; text: string; }
+export interface ContextCursor {
+  nativeSessionId: string;
+  version: string;
+  configuration: string;
+  /** A single hash is retained for compatibility with older delivery checkpoints. */
+  state: string | { decisions: string; completedTasks: string; finished: string };
+  contextDirectory?: string;
+  messages: Record<string, string>;
+  memory: Record<string, string>;
+  inFlight: boolean;
+}
 export interface Session {
   id: string; createdAt: string; updatedAt: string; project: string; scope: Scope; brief: string;
   status: 'paused' | 'running' | 'waiting_user' | 'complete' | 'error';
   messages: Message[]; activities: Activity[]; decisions: Decision[];
   completedTasks: Record<string, string>; finished: Partial<Record<AgentId, string>>;
   providerSessions: Partial<Record<AgentId, string>>;
+  contextCursors?: Partial<Record<AgentId, ContextCursor>>;
   models?: Partial<Record<AgentId, string>>;
   /** Missing only in legacy two-provider sessions. */
   agents?: AgentConfig[];

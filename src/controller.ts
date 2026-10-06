@@ -1,10 +1,13 @@
 import { randomUUID } from 'node:crypto';
-import { applyReply, buildPrompt, canImplement, resolveDecision } from './engine.js';
+import { applyReply, canImplement, resolveDecision } from './engine.js';
+import { buildContextDelivery, messageHash } from './context-delivery.js';
+import type { ContextMemory } from './context-memory.js';
+import type { ContextCursor } from './types.js';
 import { type AgentConfig, type ProviderKind, type Activity, type AgentId, type AgentProvider, type AgentReply, type Delivery, type Recipient, type Session, type UIController, type ViewState, type WorkspaceManager } from './types.js';
 
 import { agentIds, isCollaborating, isProvider, sessionAgents } from './agents.js';
 
-interface TurnResult { reply: AgentReply; ticket: number; inputRevision: number; }
+interface TurnResult { reply: AgentReply; ticket: number; inputRevision: number; context: ContextCursor; }
 type PendingTurn = { agent: AgentId; result?: TurnResult } | { agent: AgentId; error: unknown };
 
 interface Persistence { save(session: Session): void; }
@@ -27,7 +30,7 @@ export class DuetController implements UIController {
   private timer?: ReturnType<typeof setTimeout>;
   private tickAt = 0;
   private closed = false;
-  constructor(session: Session, private providers: Record<AgentId, AgentProvider>, private store: Persistence, private workspaces: Workspaces, private providerFactory?: (config: AgentConfig) => AgentProvider) {
+  constructor(session: Session, private providers: Record<AgentId, AgentProvider>, private store: Persistence, private workspaces: Workspaces, private providerFactory?: (config: AgentConfig) => AgentProvider, private memory?: Pick<ContextMemory, 'prepare'>) {
     const ids = agentIds(session);
     if (!session.brief.trim() && session.awaitingInput === undefined) session.awaitingInput = true;
     this.state = { session, streams: Object.fromEntries(ids.map(id => [id, ''])), busy: Object.fromEntries(ids.map(id => [id, false])), recipient: isCollaborating(session) && ids.length > 1 ? 'both' : ids[0]!, delivery: 'queued' };
@@ -54,6 +57,7 @@ export class DuetController implements UIController {
       const id = this.ids()[0]!, config = { id, provider }, replacement = this.providerFactory(config);
       await this.providers[id]!.dispose(); this.providers[id] = replacement;
       this.state.session.agents = [config]; delete this.state.session.providerSessions[id];
+      if (this.state.session.contextCursors) delete this.state.session.contextCursors[id];
       this.state.session.models ??= {}; delete this.state.session.models[id];
       if (this.state.session.providerModels?.[provider]) this.state.session.models[id] = this.state.session.providerModels[provider];
       this.save();
@@ -193,6 +197,7 @@ export class DuetController implements UIController {
 
   async resolve(id: string, resolution: string): Promise<void> {
     await this.pause(); this.state.session = resolveDecision(this.state.session, id, resolution); this.save();
+    await this.memory?.prepare(this.state.session);
   }
   async acceptIntegration(notes: string): Promise<void> {
     if (this.running) throw new Error('Pause before accepting integration');
@@ -201,6 +206,7 @@ export class DuetController implements UIController {
     if (!notes.trim()) throw new Error('Include the combined validation you performed');
     integration.status = 'accepted'; integration.notes = notes.trim();
     this.state.session.status = !isCollaborating(this.state.session) && this.state.session.pendingRecipients?.length ? 'paused' : 'complete'; this.note(`User accepted integrated candidate. Validation: ${notes.trim()}`);
+    await this.memory?.prepare(this.state.session);
   }
   async close(): Promise<void> {
     if (this.closed) return;
@@ -287,6 +293,9 @@ export class DuetController implements UIController {
       if (result.ticket !== this.tickets[agent] || this.state.session.status !== 'running') return;
       // Finalization may have awaited Git while the user added instructions.
       this.state.session = applyReply(this.state.session, agent, reply);
+      const ownMessage = this.state.session.messages.at(-1);
+      if (reply.message && ownMessage?.from === agent) result.context.messages[ownMessage.id] = messageHash(ownMessage);
+      this.acknowledgeContext(agent, result.context);
       const plan = this.state.session.decisions.find(decision => decision.kind === 'plan');
       const finishedDirectBuild = chat && reply.actions.some(action => action.type === 'complete_task') && plan?.status === 'agreed' && this.state.session.decisions.every(decision => decision.status === 'agreed') && plan.tasks.every(task => Object.hasOwn(this.state.session.completedTasks, task.id));
       if ((this.state.session.status === 'complete' || finishedDirectBuild) && this.state.session.scope === 'build' && plan?.tasks.length && !this.state.session.demo) {
@@ -300,13 +309,21 @@ export class DuetController implements UIController {
       }
       this.save();
     } catch (error) {
+      if (result.ticket !== this.tickets[agent] || this.state.session.status !== 'running') return;
+      this.acknowledgeContext(agent, result.context);
       this.state.session.turns++;
       this.note(`Rejected ${agent}'s response: ${error instanceof Error ? error.message : error}.${isCollaborating(this.state.session) ? ' Correct the structured actions on your next turn.' : ' Send a follow-up to try again.'}`);
       this.next = agent;
       if (!isCollaborating(this.state.session)) {
         if (result.inputRevision === (this.recipientRevisions[agent] ?? 0)) this.state.session.pendingRecipients = this.state.session.pendingRecipients?.filter(id => id !== agent);
       }
+      this.save();
     }
+    await this.memory?.prepare(this.state.session);
+  }
+  private acknowledgeContext(agent: AgentId, context: ContextCursor): void {
+    this.state.session.contextCursors ??= {};
+    this.state.session.contextCursors[agent] = { ...context, nativeSessionId: this.state.session.providerSessions[agent] ?? '', inFlight: false };
   }
   private async integrate(): Promise<void> {
     const tasks = this.state.session.decisions.find(d => d.kind === 'plan')?.tasks ?? [];
@@ -315,24 +332,38 @@ export class DuetController implements UIController {
     this.state.session.integration = { path: integrated.path, status: integrated.conflicts ? 'conflicts' : 'review' };
     this.state.session.status = 'paused';
     this.note(integrated.conflicts ? `Integration conflict. Work preserved at ${integrated.path}; original branch unchanged. Resolve the candidate manually before accepting it.` : `Integration checkpoint: ${integrated.path}. Inspect the combined diff, run validation, then /accept <validation evidence>. Original branch unchanged.`);
+    await this.memory?.prepare(this.state.session);
   }
   private async runAgent(agent: AgentId): Promise<TurnResult | undefined> {
     const inputRevision = isCollaborating(this.state.session) ? this.inputRevision : this.recipientRevisions[agent] ?? 0;
     const ticket = ++this.tickets[agent], abort = new AbortController(); this.aborts.set(agent, abort); this.queued.delete(agent);
     this.state.busy[agent] = true; this.state.streams[agent] = ''; this.notify();
     try {
+      const memory = await this.memory?.prepare(this.state.session);
+      if (abort.signal.aborted) return;
       const snapshot = structuredClone(this.state.session);
       const workspace = snapshot.demo ? { cwd: snapshot.project, writable: false } : await this.workspaces.prepare(snapshot, agent);
       if (abort.signal.aborted) return;
       const initial = !snapshot.messages.some(m => m.from === agent);
       const task = workspace.writable ? snapshot.decisions.find(d => d.kind === 'plan')?.tasks.find(t => t.owner === agent && !Object.hasOwn(snapshot.completedTasks, t.id) && t.dependsOn.every(id => Object.hasOwn(snapshot.completedTasks, id))) : undefined;
       const joining = initial && this.ids().length > 1 && snapshot.messages.some(message => this.ids().includes(message.from));
-      const prompt = buildPrompt(snapshot, agent) + (isCollaborating(snapshot) && initial && this.ids().length > 1 ? joining ? '\nJOINING EXISTING CONVERSATION: review the shared history and contribute your perspective. Return actions: [] in this first turn; you can discuss decisions and plans on subsequent turns.' : '\nINITIAL INDEPENDENT EXPLORATION: give your own initial thoughts. Return actions: [] in this turn; you will see your peer’s thoughts next.' : '') + `\nThis turn filesystem access: ${workspace.writable ? 'workspace writes allowed' : 'read only'}.` + (task && !isCollaborating(snapshot) ? `\nOnly if the user requests implementation, your authorized task is: ${JSON.stringify(task)}. Do not resume pending work merely because a task exists. Do not start sibling tasks.` : task ? `\nYour only active implementation task this turn: ${JSON.stringify(task)}. Do not start sibling tasks. Verify this task, then return complete_task for this id. Do not revise the accepted plan while implementing.` : '');
+      const delivery = buildContextDelivery(snapshot, agent, memory);
+      this.state.session.contextCursors ??= {};
+      this.state.session.contextCursors[agent] = delivery.cursor;
+      this.save();
+      const prompt = delivery.prompt + (isCollaborating(snapshot) && initial && this.ids().length > 1 ? joining ? '\nJOINING EXISTING CONVERSATION: review the shared history and contribute your perspective. Return actions: [] in this first turn; you can discuss decisions and plans on subsequent turns.' : '\nINITIAL INDEPENDENT EXPLORATION: give your own initial thoughts. Return actions: [] in this turn; you will see your peer’s thoughts next.' : '') + (task && !isCollaborating(snapshot) ? `\nOnly if the user requests implementation, your authorized task is: ${JSON.stringify(task)}. Do not resume pending work merely because a task exists. Do not start sibling tasks.` : task ? `\nYour only active implementation task this turn: ${JSON.stringify(task)}. Do not start sibling tasks. Verify this task, then return complete_task for this id. Do not revise the accepted plan while implementing.` : '');
       const reply = await this.providers[agent].run({ agent, prompt, ...workspace, sessionId: snapshot.providerSessions[agent], model: snapshot.models?.[agent], signal: abort.signal }, event => {
         if (ticket !== this.tickets[agent] || abort.signal.aborted) return;
         if (event.type === 'text') { this.state.streams[agent] = (this.state.streams[agent] + event.text).slice(-40_000); this.notify(); }
         else if (event.type === 'activity') this.activity(agent, event.text, 'tool');
-        else if (event.type === 'session') { this.state.session.providerSessions[agent] = event.sessionId; this.save(); }
+        else if (event.type === 'session') {
+          this.state.session.providerSessions[agent] = event.sessionId; this.save();
+          // Never continue a delta-only prompt in an unexpectedly replaced native thread.
+          if (!snapshot.demo && !delivery.bootstrap && snapshot.providerSessions[agent] !== event.sessionId) {
+            this.tickets[agent]++; abort.abort();
+            this.activity(agent, 'Native conversation changed; restoring context before continuing.');
+          }
+        }
         else if (event.type === 'tool_boundary' && this.queued.has(agent)) { this.queued.delete(agent); this.tickets[agent]++; abort.abort(); this.activity(agent, 'Queued steering delivered at tool boundary.'); }
       });
       if (ticket !== this.tickets[agent] || abort.signal.aborted) return;
@@ -340,7 +371,7 @@ export class DuetController implements UIController {
       // its result can declare agreement/completion.
       if (this.queued.has(agent)) { this.queued.delete(agent); this.tickets[agent]++; return; }
       if (task && reply.actions.some(a => (a.type === 'complete_task' && a.id !== task.id) || (a.type === 'propose' && a.kind === 'plan'))) throw new Error('A writable turn may only complete its assigned task and cannot revise the active plan');
-      return { reply, ticket, inputRevision };
+      return { reply, ticket, inputRevision, context: delivery.cursor };
     } catch (error) {
       if (abort.signal.aborted || ticket !== this.tickets[agent]) return;
       this.activity(agent, error instanceof Error ? error.message : String(error), 'error');

@@ -55,7 +55,7 @@ function AgentPane({ agent, view, width, height, tools, focused, scrolling }: {
     </Box>
     {height >= 7 && <Text dimColor wrap="truncate">{recent ? terminalText(recent.text).replace(/\n/g, ' ') : 'Ready for your message'}</Text>}
     <Box height={count} flexDirection="column" overflow="hidden">
-      <Text wrap="truncate">{rows.slice(start, end).map((row, index) => <Text key={`${row.source}:${row.offset}`} color={row.from === 'user' ? 'green' : row.from === 'system' ? 'yellow' : colorFor(view, row.from)}>{index ? '\n' : ''}{row.prefix ? <><Text bold>{row.text.slice(0, row.prefix.length)}</Text>{row.text.slice(row.prefix.length)}</> : row.text}</Text>)}</Text>
+      <Text wrap="truncate">{rows.slice(start, end).map((row, index) => <Text key={`${row.source}:${row.offset}`} color={row.from === 'user' ? 'green' : row.from === 'system' ? 'yellow' : row.from === agent ? colorFor(view, agent) : 'gray'}>{index ? '\n' : ''}{row.prefix ? <><Text bold>{row.text.slice(0, row.prefix.length)}</Text>{row.text.slice(row.prefix.length)}</> : row.text}</Text>)}</Text>
     </Box>
     <Text dimColor wrap="truncate">{start + 1}–{end}/{rows.length} · {anchor ? 'history · End latest' : 'live · PgUp history'}</Text>
     {tools && <Box height={toolRows} flexDirection="column" borderTop>
