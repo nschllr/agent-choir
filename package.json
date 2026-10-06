@@ -1,0 +1,20 @@
+{
+  "name": "agent-duet",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Two equal coding agents, one local terminal workspace",
+  "type": "module",
+  "license": "MIT",
+  "engines": { "node": ">=24.0.0" },
+  "bin": { "agent-duet": "dist/cli.js" },
+  "scripts": {
+    "dev": "tsx src/cli.tsx",
+    "demo": "tsx src/cli.tsx --demo",
+    "build": "tsc",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "check": "npm run typecheck && npm run build && npm test"
+  },
+  "dependencies": { "ink": "^6.3.1", "react": "^19.2.0", "string-width": "8.3.0" },
+  "devDependencies": { "@types/node": "^24.0.0", "@types/react": "^19.2.0", "tsx": "^4.20.6", "typescript": "^5.9.3", "vitest": "^3.2.4", "ink-testing-library": "^4.0.0" }
+}

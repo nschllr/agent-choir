@@ -1,0 +1,9 @@
+node_modules/
+dist/
+.protocol/
+.duet/
+*.db
+*.db-shm
+*.db-wal
+coverage/
+.env

@@ -1,0 +1,189 @@
+# Testing
+
+## Automated checks
+
+From the project directory, using Node.js 24 or newer:
+
+```sh
+npm ci
+npm run check
+```
+
+`check` runs TypeScript checking, the production build, and Vitest. Tests do not
+call real models, inspect provider logins, or consume subscription usage. Provider
+tests use protocol fixtures and local subprocesses. Git tests create disposable
+repositories and worktrees. Process tests exercise local supervision; their
+environment must permit normal subprocess and Unix-socket execution.
+Terminal lifecycle regression tests additionally use Python 3's standard-library
+PTY support on Linux/macOS; they skip when that test prerequisite is unavailable.
+Python is not an application runtime dependency.
+
+Permission regressions cover default edits-enabled startup, explicit `--read-only`,
+legacy saved permissions, conflicting flags, and discussion completing without
+an implementation plan or integration checkpoint. Existing workspace and engine
+checks verify that write access still requires an accepted plan and owned task,
+and remains unavailable in read-only sessions.
+
+| Coverage | What it establishes |
+| --- | --- |
+| Protocol | Exact schema validation; malformed actions and coercive values fail |
+| Engine | Exact-version votes, revision handling, escalation, atomic rejection, task graph/ownership/completion gates |
+| Controller | Independent initial thoughts, peer scheduling, limits, cancellation and steering, persistence, integration checkpoint |
+| Workspaces | Original checkout preservation, dirty-repository refusal, committed dependencies, finalized snapshots, conflict aborts, crash reconciliation |
+| Store | Durable snapshots, private storage, session ownership, interrupted-run recovery |
+| Providers/streaming | JSON protocol handling, visible text decoding, native configuration guards, subprocess cleanup |
+| Background | Local worker transport, attachment, bounded request handling |
+| Terminal UI | Panes, composer and recipient controls, activity and checkpoint rendering |
+
+Test fixtures establish behavior against the modeled native protocols. They do
+not establish actual model capability, provider compatibility across releases,
+or the safety of all installed native configurations.
+
+## Offline smoke test
+
+```sh
+npm run build
+node dist/cli.js --demo --headless --json --state-dir /tmp/agent-duet-smoke
+npm run demo
+```
+
+The JSON snapshot should identify the scripted demo and show both agents' messages,
+structured decisions, and completion. The terminal demonstration should display
+streaming panes and accept keyboard controls. It never writes project files.
+It does create local session state at the selected state path.
+
+An additional offline PTY check on 2026-10-07 forced terminal colors and verified
+green user text, cyan Codex text, the live-position indicator, and clean exit.
+
+For lifecycle checks, start a demo with `--detach`, attach using the printed session
+id, pause/resume, detach again, and reconnect. Ordinary exit from an attached UI
+should pause work; explicit `/detach` should leave the worker running. List/resume
+checks should preserve the session id and history.
+
+PTY tests launch the actual CLI entry point and verify an empty single-agent view
+without a startup question. They exercise initial provider selection, a solo reply,
+picker cancellation, a second instance of the same provider, named recipient cycling,
+no automatic turns when a pane opens, one directed greeting reply, Ctrl+B mode
+selection without submission, collaboration submitted with Enter, idle persistence
+after completion, and explicit exit. UI tests cover draft preservation, persistent
+selection across follow-ups, cancellation before a direct submission, independent
+pane scrolling, and stable history during streaming. Transcript tests cover wide
+characters, emoji, resize anchors, and access to messages beyond the previous
+80,000-character display limit. Controller
+tests also cover concurrent replies to both (including two Codex instances),
+delivery to an idle peer during an active turn, independent completion and follow-up,
+turn reservations, persisted recipient queues, steering,
+and direct build completion reaching the integration checkpoint. A separate non-demo startup
+test asserts zero turns and activity; native account guards prevent real provider
+calls even if that test regresses. Headless execution still exits at completion.
+
+## Real-provider acceptance exercise
+
+This is separate from the automated test suite and consumes normal provider usage.
+Install and sign in through both native CLIs first, then run `--doctor`. Select
+`--claude-model claude-haiku-4-5-20251001` for inexpensive Claude test turns.
+
+1. Use a small disposable project with a clean initial Git commit. Provide a design
+   question in discuss scope using `/collaborate <task>` or `--collaborate`.
+   Observe independent first thoughts, automatic peer
+   exchanges, and a conclusion without manually forwarding messages.
+2. Introduce a changed requirement using queued steering, then immediate steering.
+   Confirm the next accepted response uses it. Inspect commands that already ran;
+   neither steering mode should claim to roll those changes back.
+3. Ask for a plan with an explicit consequential decision. Observe exact-version
+   acceptances, or a user checkpoint after the initial unresolved cycle and two
+   further cycles. Record undeclared disagreement or shallow consensus as quality
+   findings even if the protocol mechanically succeeds.
+4. Run a build with two independent tasks and a dependent task. Check per-agent
+   branches, stable initial base, dependent code visibility, and preservation of
+   the original checkout. Inspect each finalized diff for scope and task relevance.
+5. At the integration checkpoint, run the project's actual checks in the candidate
+   worktree. Submit `/accept` with the checks and outcome. Confirm acceptance records
+   evidence without modifying the original branch.
+6. Exercise pause, exit, resume, exhausted limits, detach/attach, and native failure.
+   Confirm failed or stale turns cannot declare completion, and inspect preserved
+   work rather than assuming cancellation undoes filesystem effects.
+
+Record native CLI versions, OS, session scope, observed behavior, and limitations.
+Do not publish credentials, private prompts, or raw session databases with a report.
+Useful quality measures include successful delivery, retained disagreement,
+stopping behavior, correction after steering, and independently verified code quality.
+
+### Observed live smoke test — 2026-10-06
+
+Linux, Node 24.18.0, Claude Code 2.1.291, Codex CLI 0.160.1. Native subscription
+authentication was used, with Claude pinned to `claude-haiku-4-5-20251001` and
+Codex using its configured default. No API credentials were supplied.
+
+- One isolated Claude connectivity turn returned the expected structured reply.
+- A real discuss session completed six combined turns in approximately 50 seconds,
+  with no human message forwarding. The peers considered a CLI timer's duration
+  interface, addressed each other's positions, and settled on an optional flag
+  with a 25-minute default.
+- The saved snapshot contained a version-1 decision with explicit acceptances
+  from both peers and both finish actions. Native conversation IDs were reused
+  across turns. Model selection persisted in the snapshot; the test conversation's
+  native Claude transcript confirmed Haiku 4.5 was actually used.
+- Four Claude turns total were used across connectivity and discussion. Discussion
+  was bounded to eight combined turns and four minutes. No project edits were
+  requested or performed.
+
+This establishes real read-only communication, schema compatibility, native session
+reuse, mutual acceptance, and automatic stopping for one easy agreement case.
+Disagreement escalation and live steering still need evaluation beyond this easy
+agreement case.
+
+### Observed live build test — 2026-10-06
+
+After installing `socat`, the same provider versions and pinned Haiku model ran a
+bounded build in a disposable repository (14-turn/five-minute maximum). Nine turns
+completed in approximately 80 seconds:
+
+- Both peers explicitly accepted a three-task plan before obtaining write access.
+- Claude wrote `greeting.txt` through sandboxed Bash; Codex independently wrote
+  `farewell.txt`, each in its own Git worktree.
+- Codex then received Claude's committed output through a declared dependency and
+  created `combined.txt` from the actual files.
+- The harness prepared a clean integration candidate and paused for validation.
+  Independent checks verified all three files byte-for-byte and confirmed that
+  the original `main` branch, HEAD, and project files remained unchanged.
+- The test exercised integration acceptance with recorded validation evidence and
+  reached `complete` without any further model calls. Native Claude created empty
+  `.claude/.cc-writes` runtime directories; these did not change Git status.
+
+This checks the functional build path, dependency visibility, native sandboxed
+writes, and integration lifecycle on a tiny fixture. It does not establish sandbox
+containment against arbitrary code or implementation quality on larger projects.
+
+### Observed two-Codex discussion — 2026-10-06
+
+`--agent codex --peer codex` completed a six-turn discussion in approximately
+43 seconds. The persisted roster contained two Codex instances with two distinct
+native conversation IDs. They addressed each other as Codex 1 and Codex 2 and
+finished automatically. The test was read-only and bounded to six turns/three minutes.
+
+### Observed direct greeting regression — 2026-10-06
+
+A native session with Codex and Claude panes, without `--collaborate`, received
+`hi` addressed to Codex. Codex replied “Hi! How can I help?” and returned to input
+after exactly one turn. The saved snapshot contained only Codex's native session,
+zero Claude activity, and an empty recipient queue. Claude was configured with
+Haiku 4.5 but was never invoked. This checks the reported greeting regression;
+it does not evaluate broader collaboration quality.
+
+### Observed parallel direct chat — 2026-10-06
+
+A read-only direct greeting addressed to two Codex instances started both native
+provider calls 12 ms apart. Codex 2 completed after 4.02 seconds and Codex 1 after
+4.59 seconds; each returned one greeting in its own pane. The persisted snapshot
+contained two distinct native session IDs, two turns, and an empty pending queue.
+The test asserted that both calls started before either completed. These timings
+measure this one smoke test, not expected provider latency.
+
+## Release boundaries
+
+The first implementation has a manual combined-validation checkpoint. It does
+not automatically run the project's validation commands, assess semantic agreement,
+enforce file-to-task relevance, or allow independent tasks to continue through every
+escalated decision. Those require later implementation and real-provider evaluation.
+Passing the offline suite does not mark that production roadmap complete.
