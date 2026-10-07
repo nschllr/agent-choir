@@ -69,7 +69,12 @@ no automatic turns when a pane opens, one directed greeting reply, Ctrl+B mode
 selection without submission, collaboration submitted with Enter, idle persistence
 after completion, and explicit exit. UI tests cover draft preservation, persistent
 selection across follow-ups, cancellation before a direct submission, independent
-pane scrolling, and stable history during streaming. Transcript tests cover wide
+pane scrolling, mouse-wheel bursts, click routing in direct/collaboration modes,
+resized stacked-pane hit testing, and stable history during streaming. Composer
+checks cover soft wrapping, cursor visibility, unchanged submitted text, wide
+characters and emoji editing. Mouse parsing tests cover split packets, ignored
+releases/motion, and preserving keyboard input; PTY checks exercise real mouse
+input, resizing, wrapped drafts, and terminal-mode cleanup. Transcript tests cover wide
 characters, emoji, resize anchors, and access to messages beyond the previous
 80,000-character display limit. Code-format tests cover inline backticks, lexical
 boundaries, opaque strings/comments, and source preservation. Folding checks cover

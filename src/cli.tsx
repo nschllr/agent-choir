@@ -1,6 +1,4 @@
 #!/usr/bin/env node
-import React from 'react';
-import { render } from 'ink';
 import { parseArgs } from 'node:util';
 import { closeSync, mkdirSync, openSync, realpathSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
@@ -13,7 +11,7 @@ import { DuetController } from './controller.js';
 import { GitWorkspaceManager } from './workspaces.js';
 import { DemoProvider } from './demo.js';
 import { ClaudeProvider, CodexProvider } from './providers/index.js';
-import { App } from './ui/App.js';
+import { runTerminal } from './ui/terminal.js';
 import { agentName, isProvider, sessionAgents } from './agents.js';
 import { terminalText } from './ui/text.js';
 import { connectController, serveController } from './background.js';
@@ -101,8 +99,7 @@ async function main(): Promise<void> {
   if (values.attach) {
     const remote = await connectController(stateDir, values.attach);
     remote.detach = async () => remote.disconnect();
-    const screen = render(<App controller={remote} />, { exitOnCtrlC: false });
-    try { await screen.waitUntilExit(); } finally { remote.disconnect(); }
+    try { await runTerminal(remote); } finally { remote.disconnect(); }
     return;
   }
   const store = new SessionStore(stateDir);
@@ -110,6 +107,7 @@ async function main(): Promise<void> {
   let release: (() => void) | undefined;
   let controller: DuetController | undefined;
   let server: Awaited<ReturnType<typeof serveController>> | undefined;
+  let detachedNotice: string | undefined;
   const cleanup = async () => { await server?.close(); await controller?.close(); release?.(); store.close(); };
   try {
     const resume = values.worker ?? values.resume;
@@ -162,7 +160,8 @@ async function main(): Promise<void> {
         child.kill('SIGTERM');
         throw new Error(`Background worker did not become ready. Inspect ${join(logs, `${session.id}.log`)}`);
       }
-      console.log(`Detached session ${session.id}\nReattach: agent-duet --state-dir ${JSON.stringify(stateDir)} --attach ${session.id}`);
+      const message = `Detached session ${session.id}\nReattach: agent-duet --state-dir ${JSON.stringify(stateDir)} --attach ${session.id}`;
+      if (values.detach) console.log(message); else detachedNotice = message;
     };
     if (values.detach) { await launchWorker(); return; }
     if (values.worker) {
@@ -191,9 +190,8 @@ async function main(): Promise<void> {
       local.detach = launchWorker;
       // Keep terminal input live while the composer waits for a first/follow-up message.
       process.stdin.resume();
-      const screen = render(<App controller={local} />, { exitOnCtrlC: false });
-      if (!resume && session.brief.trim()) await controller.start();
-      await screen.waitUntilExit();
+      await runTerminal(local, !resume && session.brief.trim() ? () => controller!.start() : undefined);
+      if (detachedNotice) console.log(detachedNotice);
     }
   } finally { await cleanup(); process.stdin.pause(); }
 }

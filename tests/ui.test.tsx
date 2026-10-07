@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { render, cleanup } from 'ink-testing-library';
 import { App } from '../src/ui/App.js';
 import { terminalText, tailLines } from '../src/ui/text.js';
+import { MouseEvents } from '../src/ui/mouse.js';
 import type { UIController, ViewState } from '../src/types.js';
 
 afterEach(cleanup);
@@ -58,6 +59,61 @@ describe('terminal text handling', () => {
 });
 
 describe('terminal collaboration workspace', () => {
+  it('scrolls the hovered pane with the wheel and clicks to select a direct recipient', async () => {
+    const controller = controllerFixture(), mouse = new MouseEvents();
+    controller.getView().session.messages = ['claude', 'codex'].flatMap(agent => Array.from({ length: 40 }, (_, i) => ({ id: `${agent}-${i}`, at: '', from: agent, to: agent, text: `${agent} message ${String(i).padStart(2, '0')}` })));
+    const screen = render(<App controller={controller} mouse={mouse}/>); await settle();
+    screen.stdin.write('Draft stays here'); await settle();
+    mouse.emit('mouse', { action: 'up', x: 75, y: 6 });
+    mouse.emit('mouse', { action: 'up', x: 75, y: 6 }); await settle();
+    expect(screen.lastFrame()).toContain('claude message 39');
+    expect(screen.lastFrame()).not.toContain('codex message 39');
+    expect(screen.lastFrame()).toContain('codex message 36');
+    expect(controller.setRecipient).not.toHaveBeenCalled();
+    mouse.emit('mouse', { action: 'click', x: 75, y: 6 }); await settle();
+    expect(screen.lastFrame()).toContain('▸ Codex');
+    expect(controller.setRecipient).toHaveBeenLastCalledWith('codex');
+    mouse.emit('mouse', { action: 'click', x: 2, y: 0 }); await settle(); // Header is not a pane.
+    expect(controller.setRecipient).toHaveBeenCalledTimes(1);
+    expect(screen.lastFrame()).toContain('Draft stays here');
+    screen.stdin.write('\x1b[F'); await settle();
+    expect(screen.lastFrame()).toContain('codex message 39');
+    screen.stdin.write('\r'); await settle();
+    expect(controller.send).toHaveBeenCalledWith('Draft stays here', 'codex', 'queued');
+  });
+  it('hit-tests stacked panes after resize and keeps collaboration routing when clicking', async () => {
+    const controller = controllerFixture(), mouse = new MouseEvents();
+    const screen = render(<App controller={controller} mouse={mouse}/>); await settle();
+    Object.defineProperty(screen.stdout, 'columns', { value: 60 });
+    Object.defineProperty(screen.stdout, 'rows', { value: 40 });
+    screen.stdout.emit('resize'); await settle();
+    mouse.emit('mouse', { action: 'click', x: 10, y: 20 }); await settle();
+    expect(screen.lastFrame()).toContain('▸ Codex');
+    expect(controller.setRecipient).toHaveBeenLastCalledWith('codex');
+    screen.stdin.write('\x02'); await settle();
+    mouse.emit('mouse', { action: 'click', x: 10, y: 5 }); await settle();
+    expect(screen.lastFrame()).toContain('▸ Claude');
+    expect(screen.lastFrame()).toContain('collaboration ON');
+    expect(controller.setRecipient).toHaveBeenCalledTimes(1);
+    screen.stdin.write('Shared task'); await settle(); screen.stdin.write('\r'); await settle();
+    expect(controller.collaborate).toHaveBeenCalledWith('Shared task');
+  });
+  it('wraps long drafts, follows the cursor, and sends the original text after editing', async () => {
+    const controller = controllerFixture(true);
+    const screen = render(<App controller={controller}/>); await settle();
+    const draft = 'BEGIN ' + 'words '.repeat(25) + 'END';
+    screen.stdin.write(draft); await settle();
+    expect(screen.lastFrame()).toContain('› BEGIN'); expect(screen.lastFrame()).toContain('END▏');
+    screen.stdin.write(' more'.repeat(100)); await settle();
+    expect(screen.lastFrame()).not.toContain('› BEGIN');
+    screen.stdin.write('\x01'); await settle();
+    expect(screen.lastFrame()).toContain('› ▏BEGIN');
+    screen.stdin.write('Edited '); await settle();
+    screen.stdin.write('\x05'); await settle();
+    expect(screen.lastFrame()).toContain('more▏');
+    screen.stdin.write('\r'); await settle();
+    expect(controller.send).toHaveBeenCalledWith('Edited ' + draft + ' more'.repeat(100), 'codex', 'queued');
+  });
   it('previews five code lines and expands independently in the focused pane without changing the draft or recipient', async () => {
     const controller = controllerFixture();
     controller.getView().session.messages = ['claude', 'codex'].map(agent => ({ id: `code-${agent}`, from: agent, to: agent, at: '',

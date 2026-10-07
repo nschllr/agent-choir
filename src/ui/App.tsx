@@ -1,12 +1,14 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Box, Text, useApp, useInput, useStdout } from 'ink';
+import { Box, Text, useApp, useInput, useStdout, type DOMElement } from 'ink';
 import type { AgentId, Decision, ProviderKind, UIController, ViewState } from '../types.js';
 import { agentName, isCollaborating, sessionAgents } from '../agents.js';
 import { tailLines, terminalText } from './text.js';
 import { inlineSpans } from './code-format.js';
 import { historyStart, transcriptRows, visibleCodeBlocks, type HistoryAnchor, type TranscriptRow } from './transcript.js';
+import { composerLayout, nextCursor, previousCursor } from './composer.js';
+import { containsMouse, type MouseEvents, type MouseEvent, type PaneHandle } from './mouse.js';
 
-export interface AppProps { controller: UIController; onExit?: () => void; }
+export interface AppProps { controller: UIController; onExit?: () => void; mouse?: MouseEvents }
 const paneColors = ['cyan', 'magenta'] as const;
 const colorFor = (view: ViewState, agent: AgentId) => paneColors[Math.max(0, sessionAgents(view.session).findIndex(item => item.id === agent)) % paneColors.length]!;
 const help = 'PgUp/PgDn scroll · Ctrl+F pane · Ctrl+X code · End latest · /help';
@@ -37,9 +39,11 @@ function useView(controller: UIController): ViewState {
   return view;
 }
 
-function AgentPane({ agent, view, width, height, tools, focused, scrolling }: {
+function AgentPane({ agent, view, width, height, tools, focused, scrolling, panes }: {
   agent: AgentId; view: ViewState; width: number; height: number; tools: boolean; focused: boolean; scrolling: boolean;
+  panes: Map<AgentId, PaneHandle>;
 }) {
+  const node = useRef<DOMElement>(null);
   const { session } = view;
   const [anchor, setAnchor] = useState<HistoryAnchor | null>(null);
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
@@ -95,6 +99,19 @@ function AgentPane({ agent, view, width, height, tools, focused, scrolling }: {
   const end = Math.min(rows.length, start + count);
   const blocks = visibleCodeBlocks(rows, start, end);
   const target = blocks.find(block => block.id === selectedCode) ?? blocks[0];
+  useEffect(() => {
+    if (!node.current) return;
+    panes.set(agent, { node: node.current, scroll: delta => {
+      if (!scrolling) return;
+      setAnchor(current => {
+        const max = Math.max(0, rows.length - count);
+        const next = Math.max(0, Math.min(max, historyStart(rows, current, count) + delta));
+        const row = rows[next]!;
+        return next === max ? null : { source: row.source, offset: row.offset, index: next };
+      });
+    } });
+    return () => { panes.delete(agent); };
+  }, [agent, panes, rows, count, scrolling]);
   useInput((input, key) => {
     if (key.ctrl && input === 'k') {
       if (target) setSelectedCode(blocks[(blocks.indexOf(target) + 1) % blocks.length].id);
@@ -123,7 +140,7 @@ function AgentPane({ agent, view, width, height, tools, focused, scrolling }: {
     const row = rows[next]!;
     setAnchor(next === max ? null : { source: row.source, offset: row.offset, index: next });
   }, { isActive: focused && scrolling });
-  return <Box flexDirection="column" width={width} height={height} borderStyle={focused ? 'double' : 'round'} borderColor={colorFor(view, agent)} paddingX={1}>
+  return <Box ref={node} flexDirection="column" width={width} height={height} flexShrink={0} borderStyle={focused ? 'double' : 'round'} borderColor={colorFor(view, agent)} paddingX={1}>
     <Box justifyContent="space-between">
       <Text bold color={colorFor(view, agent)}>{focused ? '▸ ' : ''}{agentName(session, agent)}</Text>
       <Text dimColor>{view.busy[agent] ? 'working' : session.awaitingInput ? 'ready' : session.finished[agent] ? 'finished' : 'ready'}</Text>
@@ -173,7 +190,7 @@ function IntegrationCard({ integration }: { integration: NonNullable<ViewState['
   </Box>;
 }
 
-export function App({ controller, onExit }: AppProps) {
+export function App({ controller, onExit, mouse }: AppProps) {
   const view = useView(controller);
   const { exit } = useApp();
   const { stdout } = useStdout();
@@ -191,6 +208,22 @@ export function App({ controller, onExit }: AppProps) {
   const roster = sessionAgents(view.session);
   const focusedAgent = roster.some(agent => agent.id === scrollAgent) ? scrollAgent : roster[0]!.id;
   const [closing, setClosing] = useState<'close' | 'detach' | null>(null);
+  const panes = useRef(new Map<AgentId, PaneHandle>());
+  useEffect(() => {
+    const receive = (event: MouseEvent) => {
+      if (picker || closing || event.x >= size.width || event.y >= size.height - 1) return;
+      for (const [agent, pane] of panes.current) {
+        if (!containsMouse(pane.node, event)) continue;
+        if (event.action === 'click') {
+          setScrollAgent(agent);
+          if (!collaboration) controller.setRecipient(agent);
+        } else pane.scroll(event.action === 'up' ? -3 : 3);
+        break;
+      }
+    };
+    mouse?.on('mouse', receive);
+    return () => { mouse?.off('mouse', receive); };
+  }, [mouse, picker, closing, collaboration, controller, size]);
   useEffect(() => {
     const resize = () => setSize({ width: stdout.columns || 100, height: stdout.rows || 32 });
     stdout.on('resize', resize);
@@ -249,7 +282,7 @@ export function App({ controller, onExit }: AppProps) {
     if (!text) return;
     if (text.startsWith('/')) {
       const [command, ...args] = text.split(/\s+/);
-      if (command === '/help') setNotice('PgUp/PgDn scroll; Home/End oldest/latest; Alt+↑/↓ one line; Ctrl+F scroll pane. Ctrl+X expands/collapses visible code; Ctrl+K selects the next visible code block. Ctrl+B toggles collaboration; Enter submits. /collaborate [TASK] /chat /split [codex|claude] /agent [codex|claude] /pause /resume /to <agent name>|both /steer queued|immediate /resolve ID resolution /accept evidence /detach /quit');
+      if (command === '/help') setNotice('Wheel scrolls the hovered pane; click focuses and selects a direct recipient. PgUp/PgDn scroll; Home/End oldest/latest; Alt+↑/↓ one line; Ctrl+F scroll pane. Ctrl+X expands/collapses visible code; Ctrl+K selects the next visible code block. Ctrl+B toggles collaboration; Enter submits. /collaborate [TASK] /chat /split [codex|claude] /agent [codex|claude] /pause /resume /to <agent name>|both /steer queued|immediate /resolve ID resolution /accept evidence /detach /quit');
       else if (command === '/collaborate') {
         if (args.length ? !collaborate(args.join(' ')) : !selectCollaboration(true)) return;
       }
@@ -337,14 +370,14 @@ export function App({ controller, onExit }: AppProps) {
     }
     if ((key.return && key.meta) || (key.ctrl && input === 'j') || input === '\n') { insert('\n'); return; }
     if (key.return) { submit(); return; }
-    if (key.leftArrow) { setCursor(value => Math.max(0, value - 1)); return; }
-    if (key.rightArrow) { setCursor(value => Math.min(draft.length, value + 1)); return; }
+    if (key.leftArrow) { setCursor(value => previousCursor(draft, value)); return; }
+    if (key.rightArrow) { setCursor(value => nextCursor(draft, value)); return; }
     if (key.ctrl && input === 'a') { setCursor(0); return; }
     if (key.ctrl && input === 'e') { setCursor(draft.length); return; }
     if (key.ctrl && input === 'u') { setDraft(''); setCursor(0); return; }
     if (key.backspace || key.delete) {
       // Terminals often report Backspace as Delete; both erase the previous character.
-      if (cursor > 0) { setDraft(value => value.slice(0, cursor - 1) + value.slice(cursor)); setCursor(value => value - 1); }
+      if (cursor > 0) { const previous = previousCursor(draft, cursor); setDraft(value => value.slice(0, previous) + value.slice(cursor)); setCursor(previous); }
       return;
     }
     if (!key.ctrl && !key.meta && !key.escape && input) insert(input);
@@ -354,25 +387,26 @@ export function App({ controller, onExit }: AppProps) {
   const width = Math.max(24, size.width);
   const paneCount = roster.length + (picker?.mode === 'add' ? 1 : 0);
   const paneWidth = narrow || paneCount === 1 ? width : Math.floor(width / paneCount);
-  const composerLines = Math.min(4, draft.split('\n').length);
+  const composer = composerLayout(draft, cursor, width - 4);
+  const composerLines = composer.count;
   const integration = view.session.integration;
   const reserved = 8 + composerLines + (decision ? decision.status === 'waiting_user' ? 7 : 6 : 0) + (integration ? 5 : 0) + (notice ? 1 : 0) + (picker?.mode === 'initial' ? 6 : 0);
   const paneHeight = Math.max(5, Math.floor((size.height - reserved) / (narrow ? paneCount : 1)));
   const minutes = Math.floor(view.session.elapsedMs / 60_000);
-  return <Box flexDirection="column" width={width}>
-    <Box justifyContent="space-between"><Text bold>AGENT DUET <Text dimColor>· {isCollaborating(view.session) ? 'collaborating' : 'chat'} · {view.session.scope === 'build' && !view.session.demo ? 'edits enabled' : 'read-only'}</Text>{view.session.demo && <Text color="yellow"> · OFFLINE DEMO</Text>}</Text><Text color={view.session.status === 'running' ? 'green' : 'yellow'}>{closing === 'close' ? 'pausing and closing' : closing === 'detach' ? 'detaching · work continues' : view.session.awaitingInput ? 'ready' : view.session.status.replace('_', ' ')}</Text></Box>
+  return <Box flexDirection="column" width={width} height={Math.max(1, size.height - 1)} overflow="hidden">
+    <Box justifyContent="space-between" flexShrink={0}><Text bold wrap="truncate">AGENT DUET <Text dimColor>· {isCollaborating(view.session) ? 'collaborating' : 'chat'} · {view.session.scope === 'build' && !view.session.demo ? 'edits enabled' : 'read-only'}</Text>{view.session.demo && <Text color="yellow"> · OFFLINE DEMO</Text>}</Text><Text color={view.session.status === 'running' ? 'green' : 'yellow'}>{closing === 'close' ? 'pausing and closing' : closing === 'detach' ? 'detaching · work continues' : view.session.awaitingInput ? 'ready' : view.session.status.replace('_', ' ')}</Text></Box>
     <Text dimColor wrap="truncate">{terminalText(view.session.project)} · {terminalText(view.session.id)} · turns {view.session.turns}/{view.session.maxTurns} · {minutes}/{view.session.maxMinutes} min</Text>
-    <Box flexDirection={narrow ? 'column' : 'row'}>
-      {roster.map((agent, index) => <AgentPane key={agent.id} agent={agent.id} view={view} width={narrow || paneCount === 1 ? width : index === paneCount - 1 ? width - paneWidth : paneWidth} height={paneHeight} tools={tools} focused={focusedAgent === agent.id} scrolling={!picker && !closing}/>)}
+    <Box flexDirection={narrow ? 'column' : 'row'} flexShrink={0}>
+      {roster.map((agent, index) => <AgentPane key={agent.id} agent={agent.id} view={view} width={narrow || paneCount === 1 ? width : index === paneCount - 1 ? width - paneWidth : paneWidth} height={paneHeight} tools={tools} focused={focusedAgent === agent.id} scrolling={!picker && !closing} panes={panes.current}/>)}
       {picker?.mode === 'add' && <AgentPicker provider={picker.provider} width={narrow ? width : width - paneWidth} height={paneHeight} choosing={choosing}/>}
 
     </Box>
     {picker?.mode === 'initial' && <AgentPicker provider={picker.provider} width={width} choosing={choosing}/>}
     {decision && <DecisionCard decision={decision} width={width} view={view}/>}
     {integration && <IntegrationCard integration={integration}/>}
-    <Box flexDirection="column" borderStyle="round" borderColor="gray" paddingX={1}>
-      <Text dimColor>{collaboration ? <>With <Text bold>{roster.map(agent => agentName(view.session, agent.id)).join(' + ')}</Text> · collaboration ON · Enter submits to both</> : <>To <Text bold color={view.recipient === 'both' ? 'white' : colorFor(view, view.recipient)}>{view.recipient === 'both' ? 'both' : agentName(view.session, view.recipient)}</Text> · direct chat · {view.delivery === 'queued' ? 'wait until tool boundary' : 'steer immediately'}</> }</Text>
-      <Text>{tailLines(`› ${draft.slice(0, cursor)}▏${draft.slice(cursor)}`, width - 4, composerLines)}</Text>
+    <Box flexDirection="column" borderStyle="round" borderColor="gray" paddingX={1} flexShrink={0}>
+      <Text dimColor wrap="truncate">{collaboration ? <>With <Text bold>{roster.map(agent => agentName(view.session, agent.id)).join(' + ')}</Text> · collaboration ON · Enter submits to both</> : <>To <Text bold color={view.recipient === 'both' ? 'white' : colorFor(view, view.recipient)}>{view.recipient === 'both' ? 'both' : agentName(view.session, view.recipient)}</Text> · direct chat · {view.delivery === 'queued' ? 'wait until tool boundary' : 'steer immediately'}</> }</Text>
+      <Text wrap="truncate">{composer.text}</Text>
     </Box>
     {notice && <Text color="yellow" wrap="truncate">{notice}</Text>}
     <Text dimColor wrap="truncate">{view.session.status === 'complete' ? 'Round complete · send a follow-up to continue · /quit or Ctrl+C exits' : help}</Text>

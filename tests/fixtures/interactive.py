@@ -6,6 +6,7 @@ import pty
 import json
 import re
 import select
+import signal
 import struct
 import subprocess
 import sys
@@ -54,6 +55,7 @@ try:
         assert child.wait(timeout=3) == 0
         print("headless exited normally")
     else:
+        expect("\x1b[?1000h", clear=False)
         expect("Start a conversation with Codex.")
         receive(0.3)
         assert b"What should the two agents work on?" not in buffer
@@ -107,9 +109,28 @@ try:
             assert b"turns 3/30" not in buffer, "Changing mode must not submit the draft"
             send("\r")  # Enter submits in the selected mode.
             expect("Round complete")
+        if sys.argv[4] in ("empty", "read-only"):
+            send("\x1b[<0;10;6M")  # Click first pane; release must not type into the draft.
+            send("\x1b[<0;10;6m")
+            expect("To Codex 1")
+            send("BEGIN " + "wrapped words " * 35 + "END")
+            expect("END▏")
+            send("\x1b[<64;")  # Deliberately split a mouse packet across reads.
+            send("90;6M")
+            send("\x01")
+            expect("› ▏BEGIN")
+            send("\x15")
+            fcntl.ioctl(master, termios.TIOCSWINSZ, struct.pack("HHHH", 40, 60, 0, 0))
+            child.send_signal(signal.SIGWINCH)
+            receive(0.3)
+            send("\x1b[<0;10;21M")  # Second pane now stacks underneath the first.
+            expect("To Codex 2")
         send("/quit")
         send("\r")
         assert child.wait(timeout=3) == 0
+        receive(0.1)
+        assert b"\x1b[?1000l" in buffer, "Mouse tracking must be disabled on exit"
+        assert b"\x1b[?1049l" in buffer, "Shell screen must be restored on exit"
         print("single chat, split picker and named routing exited normally")
 finally:
     if child.poll() is None:

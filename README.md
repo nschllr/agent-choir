@@ -186,6 +186,8 @@ is available, the CLI announces headless mode and exits at completion instead.
 | Ctrl+P | Pause or resume |
 | Ctrl+O | Show or hide recent tool activity |
 | Ctrl+F | Switch the pane being scrolled; the message recipient stays unchanged |
+| Mouse wheel | Scroll the pane under the pointer, without changing the recipient |
+| Click a pane | Focus it and select its agent for direct messages; collaboration still sends to both |
 | Ctrl+X | Expand or collapse the selected visible code block in the focused pane |
 | Ctrl+K | Select the next expandable code block currently visible in that pane |
 | PgUp / PgDn | Scroll the focused pane by a page |
@@ -197,6 +199,16 @@ is available, the CLI announces headless mode and exits at completion instead.
 
 Some terminals reserve Ctrl+S for flow control; `/steer immediate` and
 `/steer queued` provide the same setting without that shortcut.
+
+Long drafts wrap automatically. The composer grows to four display lines, then
+scrolls to keep the cursor visible. Soft wrapping does not insert newlines into
+the message; Alt+Enter or Ctrl+J inserts an actual newline. Left/Right and
+Backspace operate on whole characters, including emoji.
+
+Mouse controls use [SGR terminal mouse reporting](https://invisible-island.net/xterm/ctlseqs/ctlseqs.html#h2-Mouse-Tracking)
+in the alternate screen. The app restores the shell screen and disables mouse
+tracking on exit. In terminals that support it, hold Shift while selecting text
+to use the terminal's normal copy selection. Keyboard controls remain available.
 
 Your messages are green and session notices are yellow. Each pane highlights its
 own agent's replies in cyan or magenta, with peer replies in muted gray. Speaker names
