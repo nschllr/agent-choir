@@ -20,9 +20,10 @@ export type CollaborationAction =
   | { type: 'propose'; id: string; kind: 'plan' | 'decision'; title: string; proposal: string; tasks: TaskSpec[] }
   | { type: 'position'; id: string; version: number; position: Position; reason: string }
   | { type: 'complete_task'; id: string; summary: string }
-  | { type: 'finish'; summary: string };
+  | { type: 'finish'; summary: string }
+  | { type: 'yield' };
 export interface AgentReply { message: string; actions: CollaborationAction[]; }
-export interface Message { id: string; at: string; from: AgentId | 'user' | 'system'; to: Recipient; text: string; }
+export interface Message { id: string; at: string; from: AgentId | 'user' | 'system'; to: Recipient; text: string; delivery?: 'display-only'; }
 export interface Activity { id: string; at: string; agent: AgentId; kind: 'tool' | 'status' | 'error'; text: string; }
 export interface ContextCursor {
   nativeSessionId: string;
@@ -42,6 +43,8 @@ export interface Session {
   completedTasks: Record<string, string>; finished: Partial<Record<AgentId, string>>;
   providerSessions: Partial<Record<AgentId, string>>;
   contextCursors?: Partial<Record<AgentId, ContextCursor>>;
+  /** Input revision at which an instance yielded without a message or action. */
+  yieldedInputs?: Partial<Record<AgentId, string>>;
   models?: Partial<Record<AgentId, string>>;
   /** Missing only in legacy two-provider sessions. */
   agents?: AgentConfig[];

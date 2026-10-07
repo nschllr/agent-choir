@@ -116,6 +116,16 @@ start, `/collaborate <task>` enables collaboration and submits that task.
 Project decisions and tasks remain shared state; their approval requirements
 still apply in direct chat.
 
+Agents can return a structured `yield` action when no peer reply is needed.
+The message remains visible in the panes but is not forwarded to the other model.
+An empty response with no actions also yields. A yielded agent runs again only
+when new user/peer input or relevant shared state arrives. Independent ready tasks
+can continue. When there is no further input or ready work, the harness returns to
+the composer with a visible notice; yielding does not complete pending tasks.
+Resuming an idle session alone does not start another empty exchange. Explicitly
+submitting a new collaboration request shares the displayed history, including
+earlier no-reply messages, as context for that request.
+
 ```sh
 npm run dev
 npm run dev -- --read-only

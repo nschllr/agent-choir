@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { buildContextDelivery } from '../src/context-delivery.js';
 import { HARNESS_INSTRUCTIONS } from '../src/context-policy.js';
 import { createSession } from '../src/engine.js';
+import { transcriptRows } from '../src/ui/transcript.js';
 import type { PreparedContext } from '../src/context-memory.js';
 import type { Session } from '../src/types.js';
 
@@ -18,6 +19,15 @@ function acknowledge(s: Session, agent = 'one', memory?: PreparedContext) {
 const memory = (files: Record<string, string>): PreparedContext => ({ directory: '/state/context/session/.agent', files, revision: 'unused' });
 
 describe('incremental native context', () => {
+  it('displays stop messages in both panes while keeping them out of peer context, including recovery', () => {
+    const s = fixture(); acknowledge(s, 'two');
+    s.messages.push({ id: 'yield', from: 'one', to: 'two', at: '', text: 'VISIBLE_STOP_MESSAGE', delivery: 'display-only' });
+    expect(buildContextDelivery(s, 'two').prompt).not.toContain('VISIBLE_STOP_MESSAGE');
+    delete s.contextCursors;
+    expect(buildContextDelivery(s, 'two').prompt).not.toContain('VISIBLE_STOP_MESSAGE');
+    expect(buildContextDelivery(s, 'one').prompt).toContain('VISIBLE_STOP_MESSAGE');
+    for (const agent of ['one', 'two']) expect(transcriptRows(s, agent, '', 100).some(row => row.text.includes('VISIBLE_STOP_MESSAGE'))).toBe(true);
+  });
   it('bootstraps once, then sends only new messages', () => {
     const s = fixture();
     const first = acknowledge(s);

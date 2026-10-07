@@ -1,13 +1,13 @@
 import { randomUUID } from 'node:crypto';
 import { applyReply, canImplement, resolveDecision } from './engine.js';
-import { buildContextDelivery, messageHash } from './context-delivery.js';
+import { buildContextDelivery, contextHash, contextMessages, hasPendingContext, messageHash } from './context-delivery.js';
 import type { ContextMemory } from './context-memory.js';
 import type { ContextCursor } from './types.js';
 import { type AgentConfig, type ProviderKind, type Activity, type AgentId, type AgentProvider, type AgentReply, type Delivery, type Recipient, type Session, type UIController, type ViewState, type WorkspaceManager } from './types.js';
 
 import { agentIds, isCollaborating, isProvider, sessionAgents } from './agents.js';
 
-interface TurnResult { reply: AgentReply; ticket: number; inputRevision: number; context: ContextCursor; }
+interface TurnResult { reply: AgentReply; ticket: number; inputRevision: number; context: ContextCursor; inputHash: string; }
 type PendingTurn = { agent: AgentId; result?: TurnResult } | { agent: AgentId; error: unknown };
 
 interface Persistence { save(session: Session): void; }
@@ -58,6 +58,7 @@ export class DuetController implements UIController {
       await this.providers[id]!.dispose(); this.providers[id] = replacement;
       this.state.session.agents = [config]; delete this.state.session.providerSessions[id];
       if (this.state.session.contextCursors) delete this.state.session.contextCursors[id];
+      if (this.state.session.yieldedInputs) delete this.state.session.yieldedInputs[id];
       this.state.session.models ??= {}; delete this.state.session.models[id];
       if (this.state.session.providerModels?.[provider]) this.state.session.models[id] = this.state.session.providerModels[provider];
       this.save();
@@ -106,7 +107,7 @@ export class DuetController implements UIController {
     this.state.session.activities.push({ id: randomUUID(), at: new Date().toISOString(), agent, kind, text });
     this.state.session.activities = this.state.session.activities.slice(-500); this.save();
   }
-  private note(text: string): void { this.state.session.messages.push({ id: randomUUID(), at: new Date().toISOString(), from: 'system', to: 'both', text }); this.save(); }
+  private note(text: string, displayOnly = false): void { this.state.session.messages.push({ id: randomUUID(), at: new Date().toISOString(), from: 'system', to: 'both', text, ...(displayOnly ? { delivery: 'display-only' as const } : {}) }); this.save(); }
   async start(): Promise<void> {
     if (this.closed) throw new Error('Session is closed');
     if (this.running || this.rosterChanging || this.state.session.status === 'complete' || !this.state.session.brief.trim()) return;
@@ -187,7 +188,7 @@ export class DuetController implements UIController {
     const s = this.state.session;
     if (s.integration && s.integration.status !== 'accepted') throw new Error('Validate the pending integration candidate first');
     if (s.decisions.some(d => d.status === 'waiting_user')) throw new Error('Resolve the pending decision first with /resolve');
-    for (const message of s.messages) message.to = 'both';
+    for (const message of s.messages) { message.to = 'both'; delete message.delivery; }
     s.interaction = 'collaborate'; s.pendingRecipients = []; s.finished = {};
     s.brief = text.trim(); s.status = 'paused'; s.awaitingInput = false;
     s.messages.push({ id: randomUUID(), at: new Date().toISOString(), from: 'user', to: 'both', text: text.trim() });
@@ -212,9 +213,17 @@ export class DuetController implements UIController {
     if (this.closed) return;
     await this.pause(); await Promise.all(this.ids().map(a => this.providers[a].dispose())); this.closed = true;
   }
+  private inputHash(s: Session, agent: AgentId): string {
+    return contextHash({ agents: sessionAgents(s), interaction: s.interaction, scope: s.scope,
+      decisions: s.decisions, completedTasks: s.completedTasks, finished: s.finished,
+      messages: contextMessages(s, agent).filter(m => m.from !== agent).map(m => [m.id, messageHash(m)]) });
+  }
   private selectAgents(): AgentId[] {
     const s = this.state.session;
-    const initial = this.ids().filter(a => !s.messages.some(m => m.from === a));
+    const tasks = canImplement(s) ? s.decisions.find(d => d.kind === 'plan')?.tasks ?? [] : [];
+    const readyTask = (a: AgentId) => tasks.some(t => t.owner === a && !Object.hasOwn(s.completedTasks, t.id) && t.dependsOn.every(id => Object.hasOwn(s.completedTasks, id)));
+    const eligible = this.ids().filter(a => s.yieldedInputs?.[a] !== this.inputHash(s, a) && (hasPendingContext(s, a) || readyTask(a)));
+    const initial = eligible.filter(a => !s.finished[a] && !s.messages.some(m => m.from === a));
     if (initial.length) {
       const latestUser = [...s.messages].reverse().find(message => message.from === 'user');
       if (!s.messages.some(message => this.ids().includes(message.from)) && latestUser?.to !== 'both') {
@@ -224,12 +233,11 @@ export class DuetController implements UIController {
       return initial;
     }
     if (canImplement(s)) {
-      const tasks = s.decisions.find(d => d.kind === 'plan')?.tasks ?? [];
-      const ready = this.ids().filter(a => tasks.some(t => t.owner === a && !Object.hasOwn(s.completedTasks, t.id) && t.dependsOn.every(id => Object.hasOwn(s.completedTasks, id))));
+      const ready = eligible.filter(readyTask);
       if (ready.length) return ready;
     }
-    if (s.finished[this.next]) this.next = this.successor(this.next);
-    return [this.next];
+    const next = eligible.includes(this.next) && !s.finished[this.next] ? this.next : eligible.find(a => !s.finished[a]);
+    return next ? [next] : [];
   }
   private async loop(): Promise<void> {
     while (this.state.session.status === 'running') {
@@ -241,7 +249,12 @@ export class DuetController implements UIController {
       }
       if (s.turns >= s.maxTurns) { this.stop('Turn limit reached. Resume explicitly to add 30 turns.'); break; }
       const selected = this.selectAgents().slice(0, s.maxTurns - s.turns);
-      if (!selected.length) { s.status = 'paused'; s.awaitingInput = true; this.save(); break; }
+      if (!selected.length) {
+        s.status = 'paused'; s.awaitingInput = true;
+        const notice = 'No further agent input is pending. Waiting for your next message; unfinished work remains pending.';
+        if (s.messages.at(-1)?.text !== notice) this.note(notice, true); else this.save();
+        break;
+      }
       const results = await Promise.all(selected.map(agent => this.runAgent(agent)));
       for (let i = 0; i < results.length; i++) await this.acceptReply(selected[i], results[i]);
       if (this.state.session.integration?.status === 'pending') await this.integrate();
@@ -287,7 +300,8 @@ export class DuetController implements UIController {
     try {
       const chat = !isCollaborating(this.state.session);
       // Native resumed conversations may still emit an old finish action.
-      const reply = chat ? { ...result.reply, actions: result.reply.actions.filter(action => action.type !== 'finish') } : result.reply;
+      const reply = { ...result.reply, message: result.reply.message.trim() ? result.reply.message : '',
+        actions: chat ? result.reply.actions.filter(action => action.type !== 'finish') : result.reply.actions };
       const updated = applyReply(this.state.session, agent, reply);
       if (result.reply.actions.some(a => a.type === 'complete_task')) await this.workspaces.finalize?.(updated, agent);
       if (result.ticket !== this.tickets[agent] || this.state.session.status !== 'running') return;
@@ -296,6 +310,12 @@ export class DuetController implements UIController {
       const ownMessage = this.state.session.messages.at(-1);
       if (reply.message && ownMessage?.from === agent) result.context.messages[ownMessage.id] = messageHash(ownMessage);
       this.acknowledgeContext(agent, result.context);
+      const yielded = reply.actions.some(a => a.type === 'yield');
+      if (yielded || (!reply.message && !reply.actions.length)) {
+        this.state.session.yieldedInputs ??= {};
+        this.state.session.yieldedInputs[agent] = result.inputHash;
+        this.activity(agent, yielded ? 'Yielded; no peer reply requested. Waiting for new input.' : 'No message or actions; waiting for new input.');
+      } else if (this.state.session.yieldedInputs) delete this.state.session.yieldedInputs[agent];
       const plan = this.state.session.decisions.find(decision => decision.kind === 'plan');
       const finishedDirectBuild = chat && reply.actions.some(action => action.type === 'complete_task') && plan?.status === 'agreed' && this.state.session.decisions.every(decision => decision.status === 'agreed') && plan.tasks.every(task => Object.hasOwn(this.state.session.completedTasks, task.id));
       if ((this.state.session.status === 'complete' || finishedDirectBuild) && this.state.session.scope === 'build' && plan?.tasks.length && !this.state.session.demo) {
@@ -351,7 +371,7 @@ export class DuetController implements UIController {
       this.state.session.contextCursors ??= {};
       this.state.session.contextCursors[agent] = delivery.cursor;
       this.save();
-      const prompt = delivery.prompt + (isCollaborating(snapshot) && initial && this.ids().length > 1 ? joining ? '\nJOINING EXISTING CONVERSATION: review the shared history and contribute your perspective. Return actions: [] in this first turn; you can discuss decisions and plans on subsequent turns.' : '\nINITIAL INDEPENDENT EXPLORATION: give your own initial thoughts. Return actions: [] in this turn; you will see your peer’s thoughts next.' : '') + (task && !isCollaborating(snapshot) ? `\nOnly if the user requests implementation, your authorized task is: ${JSON.stringify(task)}. Do not resume pending work merely because a task exists. Do not start sibling tasks.` : task ? `\nYour only active implementation task this turn: ${JSON.stringify(task)}. Do not start sibling tasks. Verify this task, then return complete_task for this id. Do not revise the accepted plan while implementing.` : '');
+      const prompt = delivery.prompt + (isCollaborating(snapshot) && initial && this.ids().length > 1 ? joining ? '\nJOINING EXISTING CONVERSATION: review the shared history and contribute your perspective. Do not propose or vote on decisions in this first turn. Yield if no peer response is needed, or finish if the exchange is complete.' : '\nINITIAL INDEPENDENT EXPLORATION: give your own initial thoughts. Do not propose or vote on decisions in this first turn. Yield if no peer response is needed, or finish if the exchange is complete; otherwise you will see your peer’s thoughts next.' : '') + (task && !isCollaborating(snapshot) ? `\nOnly if the user requests implementation, your authorized task is: ${JSON.stringify(task)}. Do not resume pending work merely because a task exists. Do not start sibling tasks.` : task ? `\nYour only active implementation task this turn: ${JSON.stringify(task)}. Do not start sibling tasks. Verify this task, then return complete_task for this id. Do not revise the accepted plan while implementing.` : '');
       const reply = await this.providers[agent].run({ agent, prompt, ...workspace, sessionId: snapshot.providerSessions[agent], model: snapshot.models?.[agent], signal: abort.signal }, event => {
         if (ticket !== this.tickets[agent] || abort.signal.aborted) return;
         if (event.type === 'text') { this.state.streams[agent] = (this.state.streams[agent] + event.text).slice(-40_000); this.notify(); }
@@ -371,7 +391,7 @@ export class DuetController implements UIController {
       // its result can declare agreement/completion.
       if (this.queued.has(agent)) { this.queued.delete(agent); this.tickets[agent]++; return; }
       if (task && reply.actions.some(a => (a.type === 'complete_task' && a.id !== task.id) || (a.type === 'propose' && a.kind === 'plan'))) throw new Error('A writable turn may only complete its assigned task and cannot revise the active plan');
-      return { reply, ticket, inputRevision, context: delivery.cursor };
+      return { reply, ticket, inputRevision, context: delivery.cursor, inputHash: this.inputHash(snapshot, agent) };
     } catch (error) {
       if (abort.signal.aborted || ticket !== this.tickets[agent]) return;
       this.activity(agent, error instanceof Error ? error.message : String(error), 'error');

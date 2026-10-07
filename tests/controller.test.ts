@@ -40,6 +40,92 @@ function setup(session?: Session) {
 }
 const expectCalls = async (provider: FakeProvider, count: number) => { await vi.waitFor(() => expect(provider.calls).toHaveLength(count), { interval: 5, timeout: 1000 }); };
 
+describe('yielding and idle collaboration', () => {
+  it.each(['', '  \n\t'])('stops empty-response loops and stays idle on resume (%j)', async message => {
+    const { controller, claude, codex } = setup();
+    for (const provider of [claude, codex]) provider.automatic = call => call.resolve(emptyReply(message));
+    await controller.start(); await controller.wait();
+    const s = controller.getView().session;
+    expect(s).toMatchObject({ status: 'paused', awaitingInput: true, turns: 2, finished: {} });
+    expect(s.messages.filter(m => ['claude', 'codex'].includes(m.from))).toEqual([]);
+    expect(s.messages.at(-1)).toMatchObject({ from: 'system', delivery: 'display-only', text: expect.stringContaining('Waiting for your next message') });
+    expect(s.activities.filter(a => a.text.includes('No message or actions'))).toHaveLength(2);
+    await controller.start(); await controller.wait();
+    expect(claude.calls).toHaveLength(1); expect(codex.calls).toHaveLength(1);
+    expect(controller.getView().session.messages).toHaveLength(s.messages.length);
+  });
+
+  it('does not forward yield messages or call a peer without new input', async () => {
+    const { controller, claude, codex } = setup();
+    for (const provider of [claude, codex]) provider.automatic = call => call.resolve({ message: `${provider.id}_NO_REPLY_NEEDED`, actions: [{ type: 'yield' }] });
+    await controller.start(); await controller.wait();
+    const s = controller.getView().session;
+    expect(s).toMatchObject({ status: 'paused', awaitingInput: true, turns: 2, finished: {} });
+    expect(s.messages.filter(m => m.from === 'claude' || m.from === 'codex')).toHaveLength(2);
+    expect(s.messages.find(m => m.from === 'claude')).toMatchObject({ delivery: 'display-only', text: 'claude_NO_REPLY_NEEDED' });
+    expect(claude.calls).toHaveLength(1); expect(codex.calls).toHaveLength(1);
+    expect(claude.calls[0].turn.prompt).not.toContain('codex_NO_REPLY_NEEDED');
+    expect(codex.calls[0].turn.prompt).not.toContain('claude_NO_REPLY_NEEDED');
+    // Resuming this saved idle state is not a new message.
+    const recovered = setup(s);
+    await recovered.controller.start(); await recovered.controller.wait();
+    expect(recovered.claude.calls).toHaveLength(0); expect(recovered.codex.calls).toHaveLength(0);
+  });
+
+  it('wakes a yielded agent for new peer input without forwarding its stop marker back', async () => {
+    const { controller, claude, codex } = setup();
+    claude.automatic = call => call.resolve({ message: 'STOP_MARKER_TEXT', actions: [{ type: 'yield' }] });
+    codex.automatic = call => call.resolve(emptyReply('NEW_PEER_IDEA'));
+    await controller.start(); await controller.wait();
+    expect(claude.calls).toHaveLength(2); expect(codex.calls).toHaveLength(1);
+    expect(claude.calls[1].turn.prompt).toContain('NEW_PEER_IDEA');
+    expect(controller.getView().session).toMatchObject({ status: 'paused', awaitingInput: true, turns: 3 });
+  });
+
+  it('wakes both agents on a new collaboration request and shares the previously displayed history', async () => {
+    const { controller, claude, codex } = setup();
+    for (const provider of [claude, codex]) provider.automatic = (call, n) => call.resolve(n === 1
+      ? { message: `${provider.id}_WAITING`, actions: [{ type: 'yield' }] }
+      : { message: `${provider.id}_ANSWER`, actions: [{ type: 'finish', summary: 'New request answered' }] });
+    await controller.start(); await controller.wait();
+    await controller.collaborate('NEW_USER_REQUEST'); await controller.wait();
+    for (const [provider, peer] of [[claude, codex], [codex, claude]]) {
+      expect(provider.calls).toHaveLength(2);
+      expect(provider.calls[1].turn.prompt).toContain('NEW_USER_REQUEST');
+      expect(provider.calls[1].turn.prompt).toContain(`${peer.id}_WAITING`);
+    }
+    expect(controller.getView().session.status).toBe('complete');
+  });
+
+  it('does not treat a stale yielding result as having consumed newer user input', async () => {
+    const { controller, claude, codex } = setup();
+    await controller.start(); await expectCalls(claude, 1); await expectCalls(codex, 1);
+    await controller.send('NEW_DIRECT_REQUEST', 'claude', 'immediate');
+    claude.calls[0].resolve({ message: 'OLD_STOP', actions: [{ type: 'yield' }] });
+    await expectCalls(claude, 2);
+    expect(claude.calls[1].turn.prompt).toContain('NEW_DIRECT_REQUEST');
+    expect(controller.getView().session.yieldedInputs?.claude).toBeUndefined();
+    claude.calls[1].resolve(emptyReply('New answer')); await controller.wait();
+    expect(controller.getView().session.messages.some(m => m.text === 'OLD_STOP')).toBe(false);
+  });
+
+  it('leaves unfinished tasks pending while another ready task makes progress', async () => {
+    const s = finishedBuild(); s.completedTasks = {}; s.finished = {};
+    s.decisions[0].tasks.push({ id: 'other', owner: 'codex', description: 'Independent task', dependsOn: [] });
+    const { controller, claude, codex } = setup(s);
+    claude.automatic = call => call.resolve({ message: 'Need user input', actions: [{ type: 'yield' }] });
+    codex.automatic = (call, n) => call.resolve(n === 1
+      ? { message: 'Independent task done', actions: [{ type: 'complete_task', id: 'other', summary: 'Validated' }] }
+      : { message: 'Waiting for remaining work', actions: [{ type: 'yield' }] });
+    await controller.start(); await controller.wait();
+    const result = controller.getView().session;
+    expect(result).toMatchObject({ status: 'paused', awaitingInput: true, completedTasks: { other: 'Validated' }, finished: {} });
+    expect(result.completedTasks.component).toBeUndefined();
+    expect(result.integration).toBeUndefined();
+    expect(claude.calls.length + codex.calls.length).toBeLessThan(6);
+  });
+});
+
 describe('native context delivery checkpoints', () => {
   const directSession = () => createSession({ project: '/tmp/project', brief: 'ORIGINAL_DIRECT_REQUEST', agents: [{ id: 'codex', provider: 'codex' }, { id: 'claude', provider: 'claude' }] });
   const answer = (call: Call, text: string, sessionId = 'native-codex') => {

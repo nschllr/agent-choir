@@ -96,6 +96,15 @@ describe('versioned peer decisions', () => {
 });
 
 describe('scope and task completion', () => {
+  it('preserves unresolved decisions and completion gates when an agent yields', () => {
+    const before = propose(create(), [{ id: 'a', owner: 'claude', description: 'Pending task', dependsOn: [] }]);
+    const yielded = applyReply(before, 'claude', { message: 'NO_REPLY_UNIQUE', actions: [{ type: 'yield' }] });
+    expect(yielded.decisions).toEqual(before.decisions);
+    expect(yielded.completedTasks).toEqual({}); expect(yielded.finished).toEqual({});
+    expect(yielded.status).not.toBe('complete'); expect(canImplement(yielded)).toBe(false);
+    expect(yielded.messages.at(-1)).toMatchObject({ text: 'NO_REPLY_UNIQUE', delivery: 'display-only' });
+    expect(buildPrompt(yielded, 'codex')).not.toContain('NO_REPLY_UNIQUE');
+  });
   it.each(['discuss', 'build'] as const)('allows discussion in %s to finish without a plan but requires both agents', scope => {
     const s = apply(create(scope), 'claude', { type: 'finish', summary: 'Recommendation' });
     expect(s.status).not.toBe('complete');

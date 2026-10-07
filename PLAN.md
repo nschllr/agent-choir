@@ -29,6 +29,7 @@ decisions; the coordinator enforces the recorded outcome.
 - [x] Replay accepted context on interruption or native-ID replacement; retain all harness history.
 - [x] Keep native conversation history; do not compact each turn or create no-op handoffs.
 - [x] Verify native recall and collaboration with Codex and Claude Haiku.
+- [x] Add explicit no-reply markers and stop empty-response loops without declaring unfinished work complete.
 
 ## Sequence
 
@@ -81,7 +82,7 @@ Natural-language agreement alone never changes permissions.
 ## Initial implementation boundaries and next evaluation
 
 - Validation: `npm run check` passes TypeScript checking, production compilation,
-  and 200 offline tests, including incremental context, recovery checkpoints,
+  and 211 offline tests, including no-reply markers, idle scheduling, incremental context, recovery checkpoints,
   project memory, independent anchored scrolling, Unicode wrapping,
   collaboration mode selection without submission,
   default/read-only permissions, empty startup, agent picker, same-provider

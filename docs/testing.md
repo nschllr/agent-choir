@@ -28,7 +28,7 @@ and remains unavailable in read-only sessions.
 | --- | --- |
 | Protocol | Exact schema validation; malformed actions and coercive values fail |
 | Engine | Exact-version votes, revision handling, escalation, atomic rejection, task graph/ownership/completion gates |
-| Controller | Independent initial thoughts, peer scheduling, limits, cancellation and steering, persistence, integration checkpoint |
+| Controller | Independent initial thoughts, peer scheduling, limits, cancellation and steering, persistence, integration checkpoint, no-reply markers and empty-response loop prevention |
 | Workspaces | Original checkout preservation, dirty-repository refusal, committed dependencies, finalized snapshots, conflict aborts, crash reconciliation |
 | Store | Durable snapshots, private storage, session ownership, interrupted-run recovery |
 | Context delivery | Incremental messages and independent state sections, private routing, mode/roster/path updates, legacy cursor migration, persisted acknowledgements, interrupted/replaced native context recovery |
@@ -78,6 +78,13 @@ turn reservations, persisted recipient queues, steering,
 and direct build completion reaching the integration checkpoint. A separate non-demo startup
 test asserts zero turns and activity; native account guards prevent real provider
 calls even if that test regresses. Headless execution still exits at completion.
+
+Yield regressions cover blank and whitespace-only replies, explicit no-reply
+markers, display without peer delivery, zero extra calls on idle resume/restart,
+new user/peer input waking an instance, stale yielding responses after steering,
+and independent work proceeding while another task remains pending. The reported
+silent-loop session was traced to six accepted empty responses after three visible
+replies; the harness was repeatedly scheduling turns with no new input.
 
 ## Real-provider acceptance exercise
 
@@ -197,6 +204,15 @@ injected prompt size and retained native history for this small example; they
 are not token billing or latency measurements. Native resume across a change
 from the original directory to a build worktree still needs a dedicated test of
 the incremental delivery path.
+
+### Observed no-reply marker smoke test — 2026-10-07
+
+Two native Codex instances in a read-only collaboration each returned a short
+greeting and a standalone `yield` action. Both greetings remained in the visible
+transcript as display-only messages. The session returned to input after exactly
+two native calls, with no completion claims. Resuming without new input made zero
+additional model calls. This verifies marker handling on the installed Codex CLI;
+automatic empty-response fallback is covered by the offline regressions.
 
 ## Release boundaries
 

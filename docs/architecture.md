@@ -178,6 +178,21 @@ and reported instead of being reset or deleted.
 
 ## Persistence and cancellation
 
+`yield` is an explicit no-reply action and must be the only action in its response.
+The engine records its text as `delivery: display-only`: both panes can display it,
+but the peer's prompt omits it. The controller records the input revision at which
+the sender yielded. Empty/whitespace-only replies with no actions use the same
+scheduling guard without fabricating completion. A peer/state/user update can wake
+the yielded instance; unrelated ready tasks remain eligible.
+
+Conversational turns require unseen input or changed shared state. Task turns can
+continue while an authorized owned task is ready, unless that instance yielded on
+the same input revision. When no instance is eligible, the session pauses awaiting
+input with a display-only system notice, so the notice itself cannot restart the
+agents. Yield checkpoints survive restart. A new explicit collaboration submission
+shares previously displayed no-reply messages as context, alongside the new request.
+Yielding never grants permissions, accepts decisions, or marks tasks complete.
+
 Native conversations retain the previous prompts, tool results, and replies.
 Each instance has a persisted delivery cursor containing its native session ID,
 protocol version, hashes of delivered messages, configuration, shared state, and

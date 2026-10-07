@@ -29,6 +29,7 @@ function validate(value: unknown): asserts value is Session {
   for (const key of ['turns', 'maxTurns', 'maxMinutes', 'elapsedMs']) if (typeof value[key] !== 'number' || !Number.isFinite(value[key]) || value[key] < 0) return invalid();
   if (!stringRecord(value.completedTasks) || !stringRecord(value.finished) || !stringRecord(value.providerSessions)) return invalid();
   for (const key of ['finished', 'providerSessions']) if (!Object.keys(value[key] as Record<string, unknown>).every(agent => agents.includes(agent))) return invalid();
+  if (value.yieldedInputs !== undefined && (!isRecord(value.yieldedInputs) || !Object.entries(value.yieldedInputs).every(([agent, hash]) => agents.includes(agent) && typeof hash === 'string' && /^[0-9a-f]{64}$/.test(hash)))) return invalid();
   if (value.contextCursors !== undefined) {
     if (!isRecord(value.contextCursors)) return invalid();
     for (const [agent, cursor] of Object.entries(value.contextCursors)) {
@@ -45,7 +46,7 @@ function validate(value: unknown): asserts value is Session {
   if (value.error !== undefined && typeof value.error !== 'string') return invalid();
   if (value.integration !== undefined && (!isRecord(value.integration) || !member(value.integration.status, ['pending', 'review', 'conflicts', 'accepted']) ||
     (value.integration.path !== undefined && typeof value.integration.path !== 'string') || (value.integration.notes !== undefined && typeof value.integration.notes !== 'string'))) return invalid();
-  if (!Array.isArray(value.messages) || !value.messages.every(item => isRecord(item) && ['id', 'at', 'text'].every(key => typeof item[key] === 'string') && member(item.from, ['user', 'system', ...agents]) && member(item.to, ['both', ...agents]))) return invalid();
+  if (!Array.isArray(value.messages) || !value.messages.every(item => isRecord(item) && ['id', 'at', 'text'].every(key => typeof item[key] === 'string') && member(item.from, ['user', 'system', ...agents]) && member(item.to, ['both', ...agents]) && (item.delivery === undefined || (item.delivery === 'display-only' && member(item.from, ['system', ...agents]))))) return invalid();
   if (!Array.isArray(value.activities) || !value.activities.every(item => isRecord(item) && ['id', 'at', 'text'].every(key => typeof item[key] === 'string') && member(item.agent, agents) && member(item.kind, ['tool', 'status', 'error']))) return invalid();
   if (!Array.isArray(value.decisions)) return invalid();
   for (const decision of value.decisions) {

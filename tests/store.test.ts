@@ -145,3 +145,18 @@ it('preserves in-flight delivery checkpoints and rejects corrupt cursor records'
   store.save(session);
   expect(store.load(session.id)).toEqual(session);
 });
+
+it('preserves yield checkpoints and display-only notices with strict validation', () => {
+  const { store, session } = fixture();
+  session.yieldedInputs = { codex: 'a'.repeat(64) };
+  session.messages.push({ id: 'stop', from: 'codex', to: 'claude', at: '', text: 'No reply needed', delivery: 'display-only' },
+    { id: 'notice', from: 'system', to: 'both', at: '', text: 'Waiting for input', delivery: 'display-only' });
+  store.save(session);
+  expect(store.load(session.id)).toEqual(session);
+  for (const yieldedInputs of [[], { unknown: 'a'.repeat(64) }, { codex: 'invalid' }]) {
+    expect(() => store.save({ ...session, yieldedInputs } as typeof session)).toThrow('Invalid session snapshot');
+  }
+  for (const message of [{ ...session.messages[0], delivery: 'invalid' }, { ...session.messages[0], delivery: 'display-only' }]) {
+    expect(() => store.save({ ...session, messages: [message] } as typeof session)).toThrow('Invalid session snapshot');
+  }
+});

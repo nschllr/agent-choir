@@ -6,6 +6,12 @@ describe('collaboration envelope', () => {
     expect(parseReply('{"message":"I agree","actions":[]}')).toEqual({ message: 'I agree', actions: [] });
     expect(REPLY_SCHEMA.additionalProperties).toBe(false);
   });
+  it('accepts an explicit no-reply marker only as a standalone action', () => {
+    expect(parseReply({ message: 'No reply needed', actions: [{ type: 'yield' }] })).toEqual({ message: 'No reply needed', actions: [{ type: 'yield' }] });
+    expect(() => parseReply({ message: '', actions: [{ type: 'yield', summary: 'extra' }] })).toThrow();
+    expect(() => parseReply({ message: '', actions: [{ type: 'yield' }, { type: 'finish', summary: 'done' }] })).toThrow('Yield must be the only action');
+    expect(() => parseReply({ message: '', actions: [{ type: 'yield' }, { type: 'yield' }] })).toThrow('Yield must be the only action');
+  });
   it.each([
     { message: 'hello', actions: [], surprise: true },
     { message: 12, actions: [] },

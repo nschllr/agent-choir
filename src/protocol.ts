@@ -14,6 +14,7 @@ export const REPLY_SCHEMA = {
     action({ type: { type: 'string', enum: ['position'] }, id: str, version: { type: 'integer', minimum: 1 }, position: { type: 'string', enum: ['accept', 'object', 'evidence'] }, reason: str }),
     action({ type: { type: 'string', enum: ['complete_task'] }, id: str, summary: str }),
     action({ type: { type: 'string', enum: ['finish'] }, summary: str }),
+    action({ type: { type: 'string', enum: ['yield'] } }),
   ] } } }, required: ['message', 'actions'],
 } as const;
 
@@ -41,6 +42,7 @@ function task(value: unknown): TaskSpec {
 function parseAction(value: unknown): CollaborationAction {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('Invalid action');
   const type = (value as Record<string, unknown>).type;
+  if (type === 'yield') { object(value, ['type']); return { type }; }
   if (type === 'propose') {
     const v = object(value, ['type', 'id', 'kind', 'title', 'proposal', 'tasks']);
     if (v.kind !== 'plan' && v.kind !== 'decision') throw new Error('Invalid decision kind');
@@ -66,5 +68,7 @@ function parseAction(value: unknown): CollaborationAction {
 export function parseReply(input: unknown | string): AgentReply {
   const v = object(typeof input === 'string' ? JSON.parse(input) : input, ['message', 'actions']);
   if (!Array.isArray(v.actions) || v.actions.length > 100) throw new Error('Invalid actions');
-  return { message: string(v.message, 'message', true), actions: v.actions.map(parseAction) };
+  const actions = v.actions.map(parseAction);
+  if (actions.some(a => a.type === 'yield') && actions.length !== 1) throw new Error('Yield must be the only action');
+  return { message: string(v.message, 'message', true), actions };
 }

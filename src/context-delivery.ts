@@ -7,6 +7,20 @@ import type { PreparedContext } from './context-memory.js';
 export const contextHash = (value: unknown): string => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 export const messageHash = (message: Message): string => contextHash({ from: message.from, text: message.text });
 export interface ContextDelivery { prompt: string; cursor: ContextCursor; bootstrap: boolean; }
+export const contextMessages = (session: Session, agent: AgentId): Message[] => session.messages.filter(m =>
+  (m.to === 'both' || m.to === agent || m.from === agent) && (m.delivery !== 'display-only' || m.from === agent));
+const configurationFor = (s: Session) => ({ mode: isCollaborating(s) ? 'collaborate' : 'chat', scope: s.scope,
+  agents: sessionAgents(s).map(item => ({ ...item, name: agentName(s, item.id) })) });
+const stateFor = (s: Session) => ({ decisions: contextHash(s.decisions), completedTasks: contextHash(s.completedTasks), finished: contextHash(s.finished) });
+
+/** Schedule conversational work only when this instance has input it has not consumed. */
+export function hasPendingContext(session: Session, agent: AgentId): boolean {
+  const previous = session.contextCursors?.[agent];
+  if (!previous || previous.inFlight || previous.version !== CONTEXT_VERSION || previous.configuration !== contextHash(configurationFor(session)) || typeof previous.state === 'string') return true;
+  const state = stateFor(session);
+  return (Object.keys(state) as Array<keyof typeof state>).some(key => state[key] !== (previous.state as typeof state)[key])
+    || contextMessages(session, agent).some(m => previous.messages[m.id] !== messageHash(m));
+}
 
 export function buildContextDelivery(session: Session, agent: AgentId, memory?: PreparedContext): ContextDelivery {
   const roster = sessionAgents(session);
@@ -15,11 +29,11 @@ export function buildContextDelivery(session: Session, agent: AgentId, memory?: 
   const nativeSessionId = session.providerSessions[agent] ?? '';
   const bootstrap = !nativeSessionId || !previous || previous.inFlight || previous.nativeSessionId !== nativeSessionId || previous.version !== CONTEXT_VERSION;
   const mode = isCollaborating(session) ? 'collaborate' : 'chat';
-  const configuration = { mode, scope: session.scope, agents: roster.map(item => ({ ...item, name: agentName(session, item.id) })) };
+  const configuration = configurationFor(session);
   const configurationHash = contextHash(configuration);
-  const visible = session.messages.filter(m => m.to === 'both' || m.to === agent || m.from === agent);
+  const visible = contextMessages(session, agent);
   const incoming = visible.filter(m => bootstrap || previous.messages[m.id] !== messageHash(m));
-  const state = { decisions: contextHash(session.decisions), completedTasks: contextHash(session.completedTasks), finished: contextHash(session.finished) };
+  const state = stateFor(session);
   const cursor: ContextCursor = { nativeSessionId, version: CONTEXT_VERSION, configuration: configurationHash,
     state, contextDirectory: memory?.directory, messages: bootstrap ? {} : { ...previous.messages }, memory: {}, inFlight: true };
   const parts: string[] = [];

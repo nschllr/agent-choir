@@ -57,6 +57,7 @@ export function applyReply(session: Session, agent: AgentId, input: AgentReply):
   if (session.status === 'complete' || session.status === 'error') throw new Error('Session is not accepting replies');
   const reply = parseReply(input), s = structuredClone(session);
   for (const a of reply.actions) {
+    if (a.type === 'yield') continue;
     if (a.type === 'propose') {
       validateTasks(a.tasks, agents);
       if (a.kind !== 'plan' && a.tasks.length) throw new Error('Only plans can assign tasks');
@@ -103,7 +104,8 @@ export function applyReply(session: Session, agent: AgentId, input: AgentReply):
     }
   }
   s.updatedAt = new Date().toISOString();
-  if (reply.message) s.messages.push({ id: randomUUID(), at: s.updatedAt, from: agent, to: isCollaborating(s) ? agents.find(id => id !== agent) ?? 'both' : agent, text: reply.message });
+  if (reply.message) s.messages.push({ id: randomUUID(), at: s.updatedAt, from: agent, to: isCollaborating(s) ? agents.find(id => id !== agent) ?? 'both' : agent, text: reply.message,
+    ...(reply.actions.some(a => a.type === 'yield') ? { delivery: 'display-only' as const } : {}) });
   s.turns++;
   checkCompletion(s);
   return s;
