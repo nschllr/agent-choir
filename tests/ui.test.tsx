@@ -59,6 +59,45 @@ describe('terminal text handling', () => {
 });
 
 describe('terminal collaboration workspace', () => {
+  it('freezes a single-pane copy view, disables mouse tracking, and preserves drafts and routing', async () => {
+    const controller = controllerFixture(), mouse = new MouseEvents(), tracking = vi.fn();
+    mouse.on('tracking', tracking);
+    controller.getView().session.messages = [
+      { id: 'old', from: 'claude', to: 'claude', at: '', text: 'Select and copy this message.' },
+      { id: 'code', from: 'claude', to: 'claude', at: '', text: '```js\n' + Array.from({ length: 8 }, (_, i) => `line_${i}`).join('\n') + '\n```' },
+      { id: 'private', from: 'codex', to: 'codex', at: '', text: 'Other pane private message' },
+    ];
+    const screen = render(<App controller={controller} mouse={mouse}/>); await settle();
+    screen.stdin.write('Draft stays'); await settle(); screen.stdin.write('\x19'); await settle();
+    expect(screen.lastFrame()).toContain('COPY MODE · Claude');
+    expect(screen.lastFrame()).toContain('line_7'); // Copy view includes full code, without fold controls.
+    expect(screen.lastFrame()).not.toContain('Ctrl+X expand');
+    expect(screen.lastFrame()).not.toContain('Other pane private message');
+    expect(tracking).toHaveBeenLastCalledWith(false);
+    controller.getView().streams.claude = 'New reply arriving'; controller.setDelivery('queued'); await settle();
+    expect(screen.lastFrame()).not.toContain('New reply arriving');
+    mouse.emit('mouse', { action: 'click', x: 75, y: 5 });
+    screen.stdin.write('\x03'); await settle(); // Copy shortcut cannot accidentally exit the app.
+    expect(controller.close).not.toHaveBeenCalled(); expect(controller.setRecipient).not.toHaveBeenCalled();
+    screen.stdin.write('\x1b'); await settle();
+    expect(tracking).toHaveBeenLastCalledWith(true);
+    expect(screen.lastFrame()).toContain('Draft stays'); expect(screen.lastFrame()).toContain('New reply arriving');
+    screen.stdin.write('\r'); await settle();
+    expect(controller.send).toHaveBeenCalledWith('Draft stays', 'both', 'queued');
+  });
+  it('scrolls the copy snapshot without changing the pane history behind it', async () => {
+    const controller = controllerFixture(true), mouse = new MouseEvents();
+    controller.getView().session.messages = Array.from({ length: 35 }, (_, i) => ({ id: `m${i}`, from: 'codex', to: 'codex', at: '', text: `Copy history ${i}` }));
+    const screen = render(<App controller={controller} mouse={mouse}/>); await settle();
+    screen.stdin.write('\x1b[H'); await settle();
+    screen.stdin.write('\x19'); await settle();
+    expect(screen.lastFrame()).toContain('Copy history 0');
+    screen.stdin.write('\x1b[F'); await settle();
+    expect(screen.lastFrame()).toContain('Copy history 34');
+    screen.stdin.write('\x19'); await settle();
+    expect(screen.lastFrame()).toContain('Copy history 0');
+    expect(screen.lastFrame()).not.toContain('Copy history 34');
+  });
   it('scrolls the hovered pane with the wheel and clicks to select a direct recipient', async () => {
     const controller = controllerFixture(), mouse = new MouseEvents();
     controller.getView().session.messages = ['claude', 'codex'].flatMap(agent => Array.from({ length: 40 }, (_, i) => ({ id: `${agent}-${i}`, at: '', from: agent, to: agent, text: `${agent} message ${String(i).padStart(2, '0')}` })));

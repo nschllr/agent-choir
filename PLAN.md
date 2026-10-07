@@ -83,7 +83,7 @@ Natural-language agreement alone never changes permissions.
 ## Initial implementation boundaries and next evaluation
 
 - Validation: `npm run check` passes TypeScript checking, production compilation,
-  and 247 offline tests, including mouse controls, wrapped drafts, code formatting/folding, no-reply markers, idle scheduling, incremental context, recovery checkpoints,
+  and 256 offline tests, including copy mode, native chat titles, exit resume commands, mouse controls, wrapped drafts, code formatting/folding, no-reply markers, idle scheduling, incremental context, recovery checkpoints,
   project memory, independent anchored scrolling, Unicode wrapping,
   collaboration mode selection without submission,
   default/read-only permissions, empty startup, agent picker, same-provider

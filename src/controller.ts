@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { nativeSessionTitle } from './session-label.js';
 import { applyReply, canImplement, resolveDecision } from './engine.js';
 import { buildContextDelivery, contextHash, contextMessages, hasPendingContext, messageHash } from './context-delivery.js';
 import type { ContextMemory } from './context-memory.js';
@@ -372,7 +373,7 @@ export class DuetController implements UIController {
       this.state.session.contextCursors[agent] = delivery.cursor;
       this.save();
       const prompt = delivery.prompt + (isCollaborating(snapshot) && initial && this.ids().length > 1 ? joining ? '\nJOINING EXISTING CONVERSATION: review the shared history and contribute your perspective. Do not propose or vote on decisions in this first turn. Yield if no peer response is needed, or finish if the exchange is complete.' : '\nINITIAL INDEPENDENT EXPLORATION: give your own initial thoughts. Do not propose or vote on decisions in this first turn. Yield if no peer response is needed, or finish if the exchange is complete; otherwise you will see your peer’s thoughts next.' : '') + (task && !isCollaborating(snapshot) ? `\nOnly if the user requests implementation, your authorized task is: ${JSON.stringify(task)}. Do not resume pending work merely because a task exists. Do not start sibling tasks.` : task ? `\nYour only active implementation task this turn: ${JSON.stringify(task)}. Do not start sibling tasks. Verify this task, then return complete_task for this id. Do not revise the accepted plan while implementing.` : '');
-      const reply = await this.providers[agent].run({ agent, prompt, ...workspace, sessionId: snapshot.providerSessions[agent], model: snapshot.models?.[agent], signal: abort.signal }, event => {
+      const reply = await this.providers[agent].run({ agent, prompt, ...workspace, sessionId: snapshot.providerSessions[agent], model: snapshot.models?.[agent], title: nativeSessionTitle(snapshot, agent), signal: abort.signal }, event => {
         if (ticket !== this.tickets[agent] || abort.signal.aborted) return;
         if (event.type === 'text') { this.state.streams[agent] = (this.state.streams[agent] + event.text).slice(-40_000); this.notify(); }
         else if (event.type === 'activity') this.activity(agent, event.text, 'tool');

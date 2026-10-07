@@ -35,6 +35,7 @@ export class ClaudeProvider implements AgentProvider {
     ];
     if (turn.sessionId) args.push('--resume', turn.sessionId);
     if (turn.model) args.push('--model', turn.model);
+    if (turn.title) args.push('--name', turn.title);
     const process = new JsonProcess(this.options.binary ?? 'claude', args, turn.cwd, message => {
       if (typeof message.session_id === 'string') emit({ type: 'session', sessionId: message.session_id });
       if (message.type === 'system' && message.subtype === 'init' && typeof message.model === 'string') {

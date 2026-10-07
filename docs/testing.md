@@ -74,7 +74,12 @@ resized stacked-pane hit testing, and stable history during streaming. Composer
 checks cover soft wrapping, cursor visibility, unchanged submitted text, wide
 characters and emoji editing. Mouse parsing tests cover split packets, ignored
 releases/motion, and preserving keyboard input; PTY checks exercise real mouse
-input, resizing, wrapped drafts, and terminal-mode cleanup. Transcript tests cover wide
+input, resizing, wrapped drafts, and terminal-mode cleanup. Copy-view checks verify
+frozen output, focused-pane privacy,
+full code, preserved drafts/history/routing, mouse tracking toggles, and keyboard
+scrolling. PTY checks verify that a usable resume command appears after returning
+to the shell. Native title fixtures cover new/resumed Codex threads, an unsupported
+title method, and Claude's name argument. Transcript tests cover wide
 characters, emoji, resize anchors, and access to messages beyond the previous
 80,000-character display limit. Code-format tests cover inline backticks, lexical
 boundaries, opaque strings/comments, and source preservation. Folding checks cover

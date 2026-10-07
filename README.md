@@ -186,6 +186,7 @@ is available, the CLI announces headless mode and exits at completion instead.
 | Ctrl+P | Pause or resume |
 | Ctrl+O | Show or hide recent tool activity |
 | Ctrl+F | Switch the pane being scrolled; the message recipient stays unchanged |
+| Ctrl+Y or /copy | Open a frozen, single-column copy view of the focused pane; Esc/Ctrl+Y returns |
 | Mouse wheel | Scroll the pane under the pointer, without changing the recipient |
 | Click a pane | Focus it and select its agent for direct messages; collaboration still sends to both |
 | Ctrl+X | Expand or collapse the selected visible code block in the focused pane |
@@ -210,6 +211,15 @@ in the alternate screen. The app restores the shell screen and disables mouse
 tracking on exit. In terminals that support it, hold Shift while selecting text
 to use the terminal's normal copy selection. Keyboard controls remain available.
 
+For reliable selection, press **Ctrl+Y** (or enter `/copy`). This freezes the focused
+pane's transcript in a single column and disables mouse tracking. Drag to select,
+then use your terminal's Copy menu/shortcut, such as Ctrl+Shift+C on many Linux
+terminals. PgUp/PgDn, arrows, and Home/End navigate the snapshot. Code is shown in
+full, without folding controls or decorative borders. Esc or Ctrl+Y restores the
+split view, mouse controls, draft, and previous scroll position. Agents may keep
+working while you copy; new output appears after you return. Copy mode uses your
+terminal's clipboard support and does not overwrite the clipboard itself.
+
 Your messages are green and session notices are yellow. Each pane highlights its
 own agent's replies in cyan or magenta, with peer replies in muted gray. Speaker names
 remain visible when terminal colors are disabled. A double border and arrow mark
@@ -231,7 +241,7 @@ retain plain code formatting. Peer code remains muted gray, with structure and
 keyword emphasis. Backtick and tilde fences are supported, including unfinished
 blocks while a reply streams. Highlighting is lexical, not a full language parser.
 
-Commands: `/help`, `/split [codex|claude]`, `/agent [codex|claude]`, `/pause`, `/resume`, `/to <agent name>|both`,
+Commands: `/help`, `/copy`, `/split [codex|claude]`, `/agent [codex|claude]`, `/pause`, `/resume`, `/to <agent name>|both`,
 `/collaborate [task]`, `/chat`, `/steer queued|immediate`, `/resolve ID resolution`, `/accept validation evidence`,
 `/detach`, and `/quit`.
 
@@ -301,6 +311,21 @@ The worker stays available at completion/checkpoints until its process is
 terminated; exiting the attached UI only pauses it. While that worker owns the
 session, reconnect with `--attach` rather than opening it with `--resume`.
 There is no dedicated worker-stop command in this release.
+
+After the interactive view closes, the shell shows a copyable command for this
+session. Local sessions use `--resume`; attached/background sessions use `--attach`.
+The command includes the absolute launcher and state paths, including development
+loaders when started through `npm run dev`, so it works from another directory.
+
+Native peer chats receive descriptive names starting with `Agent duet`, for example
+`Agent duet · search · Codex 1 · Design search suggestions · 61ea67d1`.
+Names use the project, peer name, first user message, and short harness session ID;
+they require no extra model call. Titles are applied when each peer next runs,
+including resumed chats. Two peers of the same provider retain distinct names.
+The adapters use Codex's supported
+[`thread/name/set`](https://learn.chatgpt.com/docs/app-server) method and Claude's
+[`--name`](https://code.claude.com/docs/en/cli-reference) option. Unsupported Codex
+title updates produce an activity notice without failing the conversation.
 
 Default allowances are 30 provider turns and 30 minutes of active wall time.
 Set `--max-turns N` and `--max-minutes N`. Explicit resume of an exhausted allowance

@@ -3,8 +3,8 @@ import { PassThrough } from 'node:stream';
 import type { DOMElement } from 'ink';
 
 export interface MouseEvent { x: number; y: number; action: 'click' | 'up' | 'down' }
-export class MouseEvents extends EventEmitter<{ mouse: [MouseEvent] }> {}
-export interface PaneHandle { node: DOMElement; scroll: (lines: number) => void }
+export class MouseEvents extends EventEmitter<{ mouse: [MouseEvent]; tracking: [boolean] }> {}
+export interface PaneHandle { node: DOMElement; scroll: (lines: number) => void; source: () => string }
 
 export function containsMouse(node: DOMElement, event: MouseEvent): boolean {
   let left = 0, top = 0;

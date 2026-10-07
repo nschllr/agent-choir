@@ -19,6 +19,8 @@ export async function runTerminal(controller: UIController, start?: () => Promis
   };
   process.once('exit', restore);
   process.stdout.write(enter);
+  const tracking = (enabled: boolean) => process.stdout.write(enabled ? '\x1b[?1006h\x1b[?1000h' : '\x1b[?1000l\x1b[?1006l');
+  events.on('tracking', tracking);
   let screen: ReturnType<typeof render> | undefined;
   const terminate = () => screen?.unmount();
   process.once('SIGTERM', terminate);
@@ -30,6 +32,7 @@ export async function runTerminal(controller: UIController, start?: () => Promis
   } finally {
     screen?.unmount();
     input.dispose();
+    events.off('tracking', tracking);
     restore();
     process.off('exit', restore);
     process.off('SIGTERM', terminate);

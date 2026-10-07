@@ -12,6 +12,7 @@ import { GitWorkspaceManager } from './workspaces.js';
 import { DemoProvider } from './demo.js';
 import { ClaudeProvider, CodexProvider } from './providers/index.js';
 import { runTerminal } from './ui/terminal.js';
+import { resumeCommand } from './resume-command.js';
 import { agentName, isProvider, sessionAgents } from './agents.js';
 import { terminalText } from './ui/text.js';
 import { connectController, serveController } from './background.js';
@@ -49,6 +50,7 @@ Options:
 Controls:
   Ctrl+N add agent · Ctrl+G initial agent · Tab recipient · Ctrl+S steering
   Ctrl+B toggle collaboration · Ctrl+P pause/resume · Ctrl+O tools
+  Ctrl+Y copy focused pane · Esc leaves copy mode · /copy
   Enter send · Alt+Enter/Ctrl+J newline · Ctrl+C pause/exit
   PgUp/PgDn scroll · Alt+Up/Down one line · Home/End oldest/latest · Ctrl+F scroll pane
   /help /split /agent /collaborate [TASK] /chat /pause /resume /to /steer /resolve ID choice /accept evidence /detach /quit
@@ -99,7 +101,10 @@ async function main(): Promise<void> {
   if (values.attach) {
     const remote = await connectController(stateDir, values.attach);
     remote.detach = async () => remote.disconnect();
-    try { await runTerminal(remote); } finally { remote.disconnect(); }
+    try { await runTerminal(remote); } finally {
+      remote.disconnect();
+      console.log(`Reattach to this session:\n${resumeCommand(stateDir, values.attach, 'attach')}`);
+    }
     return;
   }
   const store = new SessionStore(stateDir);
@@ -160,7 +165,7 @@ async function main(): Promise<void> {
         child.kill('SIGTERM');
         throw new Error(`Background worker did not become ready. Inspect ${join(logs, `${session.id}.log`)}`);
       }
-      const message = `Detached session ${session.id}\nReattach: agent-duet --state-dir ${JSON.stringify(stateDir)} --attach ${session.id}`;
+      const message = `Detached session ${session.id}\nReattach: ${resumeCommand(stateDir, session.id, 'attach')}`;
       if (values.detach) console.log(message); else detachedNotice = message;
     };
     if (values.detach) { await launchWorker(); return; }
@@ -190,8 +195,11 @@ async function main(): Promise<void> {
       local.detach = launchWorker;
       // Keep terminal input live while the composer waits for a first/follow-up message.
       process.stdin.resume();
-      await runTerminal(local, !resume && session.brief.trim() ? () => controller!.start() : undefined);
-      if (detachedNotice) console.log(detachedNotice);
+      try { await runTerminal(local, !resume && session.brief.trim() ? () => controller!.start() : undefined); }
+      finally {
+        if (detachedNotice) console.log(detachedNotice);
+        else console.log(`Resume this session:\n${resumeCommand(stateDir, session.id, 'resume')}`);
+      }
     }
   } finally { await cleanup(); process.stdin.pause(); }
 }

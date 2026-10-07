@@ -7,6 +7,7 @@ import json
 import re
 import select
 import signal
+import shlex
 import struct
 import subprocess
 import sys
@@ -125,12 +126,24 @@ try:
             receive(0.3)
             send("\x1b[<0;10;21M")  # Second pane now stacks underneath the first.
             expect("To Codex 2")
+        send("\x19")
+        expect("COPY MODE", clear=False)
+        expect("\x1b[?1000l", clear=False)
+        send("\x1b")
+        expect("\x1b[?1000h")
         send("/quit")
         send("\r")
         assert child.wait(timeout=3) == 0
         receive(0.1)
         assert b"\x1b[?1000l" in buffer, "Mouse tracking must be disabled on exit"
         assert b"\x1b[?1049l" in buffer, "Shell screen must be restored on exit"
+        restored = buffer.rsplit(b"\x1b[?1049l", 1)[1].decode(errors="replace")
+        assert "Resume this session:" in restored, "Resume command must remain visible after restoring the shell"
+        command = restored.split("Resume this session:", 1)[1].strip().splitlines()[0]
+        args = shlex.split(command)
+        assert args[0] == sys.argv[1] and args[1] == sys.argv[2]
+        assert args[args.index("--state-dir") + 1] == json.loads(sys.argv[3])[1]
+        assert "--resume" in args
         print("single chat, split picker and named routing exited normally")
 finally:
     if child.poll() is None:

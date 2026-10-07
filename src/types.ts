@@ -60,7 +60,7 @@ export interface Session {
 }
 export interface ProviderTurn {
   agent: AgentId; prompt: string; cwd: string; writable: boolean;
-  sessionId?: string; model?: string; signal: AbortSignal;
+  sessionId?: string; model?: string; title?: string; signal: AbortSignal;
 }
 export type ProviderEvent =
   | { type: 'text'; text: string }

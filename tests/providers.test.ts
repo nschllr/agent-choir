@@ -24,6 +24,7 @@ readline.createInterface({input:process.stdin}).on('line', line => {
  if(m.method==='account/read') send({id:m.id,result:{account:{type:'chatgpt'}}});
  if(m.method==='config/read') send({id:m.id,result:{config:{}}});
  if(m.method==='thread/start'||m.method==='thread/resume') send({id:m.id,result:{thread:{id:m.params.threadId||'session-1'}}});
+ if(m.method==='thread/name/set') send({id:m.id,result:{}});
  if(m.method==='turn/start') {
   const p=m.params;
   const safe=p.approvalPolicy==='never' && p.outputSchema.type==='object' &&
@@ -38,6 +39,24 @@ readline.createInterface({input:process.stdin}).on('line', line => {
  }
 });`;
 describe('native provider adapters with local protocol fixtures', () => {
+  it('sets the native Codex title for both new and resumed threads', async () => {
+    const f = await fixture(codexFixture.replace("const m=JSON.parse(line);", "const m=JSON.parse(line); require('node:fs').appendFileSync('requests.jsonl',line+'\\n');"));
+    const provider = new CodexProvider(f.options);
+    const title = 'Agent duet · project · Codex · Search UI';
+    await provider.run(turn(f.cwd, { title }), () => {});
+    await provider.run(turn(f.cwd, { title, sessionId: 'session-1' }), () => {});
+    const requests = (await readFile(join(f.cwd, 'requests.jsonl'), 'utf8')).trim().split('\n').map(line => JSON.parse(line));
+    expect(requests.filter(request => request.method === 'thread/name/set').map(request => request.params))
+      .toEqual([{ threadId: 'session-1', name: title }, { threadId: 'session-1', name: title }]);
+    await provider.dispose();
+  });
+  it('continues a Codex turn when an older server rejects the optional title method', async () => {
+    const f = await fixture(codexFixture.replace("if(m.method==='thread/name/set') send({id:m.id,result:{}});", "if(m.method==='thread/name/set') send({id:m.id,error:{code:-32601}});"));
+    const provider = new CodexProvider(f.options), events: ProviderEvent[] = [];
+    expect((await provider.run(turn(f.cwd, { title: 'Agent duet · example' }), event => events.push(event))).message).toBe('safe');
+    expect(events).toContainEqual({ type: 'activity', text: 'Codex chat title could not be updated. Check native CLI compatibility.' });
+    await provider.dispose();
+  });
   it('Codex initializes v2, streams boundaries, validates reply, and resumes with per-turn policy', async () => {
     const f = await fixture(codexFixture); const provider = new CodexProvider(f.options); const events: ProviderEvent[] = [];
     expect(await provider.run(turn(f.cwd), e => events.push(e))).toEqual({ message: 'safe', actions: [] });
@@ -54,14 +73,14 @@ describe('native provider adapters with local protocol fixtures', () => {
  const args=process.argv.slice(2), get=k=>args[args.indexOf(k)+1];
  let input=''; process.stdin.on('data',d=>input+=d); process.stdin.on('end',()=>{
   const settings=JSON.parse(get('--settings'));
-  const safe=get('--tools')==='Read,Glob,Grep' && get('--setting-sources')==='' && settings.disableAllHooks && args.includes('--strict-mcp-config') && get('--permission-mode')==='dontAsk' && get('--model')==='claude-haiku-4-5-20251001' && get('--resume')==='claude-1';
+  const safe=get('--tools')==='Read,Glob,Grep' && get('--setting-sources')==='' && settings.disableAllHooks && args.includes('--strict-mcp-config') && get('--permission-mode')==='dontAsk' && get('--model')==='claude-haiku-4-5-20251001' && get('--resume')==='claude-1' && get('--name')==='Agent duet · project · Claude · Search UI';
   const send=v=>console.log(JSON.stringify(v));
   send({type:'system',subtype:'init',session_id:'claude-1',model:'claude-haiku-4-5-20251001'});
   send({type:'stream_event',event:{type:'content_block_start',content_block:{type:'tool_use',name:'Read'}}});
   send({type:'result',subtype:'success',structured_output:{message:safe&&input?'safe':'unsafe',actions:[]}});
  });`);
     const provider = new ClaudeProvider(f.options); const events: ProviderEvent[] = [];
-    expect(await provider.run(turn(f.cwd, { agent: 'claude', model: 'claude-haiku-4-5-20251001', sessionId: 'claude-1' }), e => events.push(e))).toEqual({ message: 'safe', actions: [] });
+    expect(await provider.run(turn(f.cwd, { agent: 'claude', model: 'claude-haiku-4-5-20251001', sessionId: 'claude-1', title: 'Agent duet · project · Claude · Search UI' }), e => events.push(e))).toEqual({ message: 'safe', actions: [] });
     expect(events).toContainEqual({ type: 'session', sessionId: 'claude-1' });
     expect(events).toContainEqual({ type: 'activity', text: 'Claude model: claude-haiku-4-5-20251001' });
     expect(events).toContainEqual({ type: 'tool_boundary' }); await provider.dispose();

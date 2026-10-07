@@ -75,9 +75,9 @@ export class CodexProvider implements AgentProvider {
     }, fail);
     this.active.add(process);
     void process.closed.then(() => fail(new Error('Codex exited before completing its turn')));
-    const request = (method: string, params: unknown): Promise<any> => new Promise((resolve, reject) => {
+    const request = (method: string, params: unknown, timeout = 30_000): Promise<any> => new Promise((resolve, reject) => {
       const id = ++sequence;
-      const timer = setTimeout(() => { pending.delete(id); reject(new Error(`Codex timed out during ${method}`)); }, 30_000);
+      const timer = setTimeout(() => { pending.delete(id); reject(new Error(`Codex timed out during ${method}`)); }, timeout);
       pending.set(id, { resolve, reject, timer }); process.write({ id, method, params });
     });
     const abort = () => { fail(abortError()); process.stop(); };
@@ -110,6 +110,13 @@ export class CodexProvider implements AgentProvider {
       threadId = thread.thread?.id;
       if (!threadId) throw new Error('Codex app-server protocol mismatch: thread ID missing');
       emit({ type: 'session', sessionId: threadId });
+      if (turn.title) {
+        try { await request('thread/name/set', { threadId, name: turn.title }, 5000); }
+        catch (error) {
+          if (turn.signal.aborted) throw abortError();
+          emit({ type: 'activity', text: 'Codex chat title could not be updated. Check native CLI compatibility.' });
+        }
+      }
       const started = await request('turn/start', {
         threadId, cwd: turn.cwd, model: turn.model, approvalPolicy: 'never',
         sandboxPolicy: turn.writable
