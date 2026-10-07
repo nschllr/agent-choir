@@ -3,6 +3,7 @@ import { REPLY_SCHEMA, parseReply } from '../protocol.js';
 import { abortError, JsonProcess, type ProcessOptions } from './process.js';
 import { ReplyMessageStream } from './reply-stream.js';
 import { requireSubscriptionEnvironment } from './subscription.js';
+import { codexModelCatalog, parseCodexModels } from './codex-models.js';
 
 // All are recognized by the locally generated app-server version. External
 // automation/browser tools do not inherit the shell filesystem boundary.
@@ -13,6 +14,7 @@ export class CodexProvider implements AgentProvider {
   readonly id = 'codex' as const;
   private active = new Set<JsonProcess>();
   constructor(private readonly options: ProcessOptions = {}) {}
+  async listModels(cwd: string) { requireSubscriptionEnvironment('codex'); return codexModelCatalog(cwd, this.options, this.active); }
   async run(turn: ProviderTurn, emit: (event: ProviderEvent) => void): Promise<AgentReply> {
     if (turn.signal.aborted) throw abortError();
     requireSubscriptionEnvironment('codex');
@@ -104,7 +106,27 @@ export class CodexProvider implements AgentProvider {
       if (effective.config.hooks && Object.keys(effective.config.hooks).length) {
         throw new Error('Agent Duet cannot isolate configured Codex hooks. Disable them in native Codex configuration for this project before continuing.');
       }
-      const config = { cwd: turn.cwd, model: turn.model, approvalPolicy: 'never', sandbox: turn.writable ? 'workspace-write' : 'read-only',
+      let model = turn.model ?? undefined, effort = turn.effort ?? undefined;
+      if (turn.model === null || turn.effort === null) {
+        const models: import('../types.js').ModelOption[] = [], cursors = new Set<string>();
+        let cursor: string | undefined, defaultModel = effective.config.model;
+        do {
+          const page = await request('model/list', { limit: 100, includeHidden: true, cursor });
+          models.push(...parseCodexModels(page.data, true));
+          defaultModel ??= page.data.find((item: any) => item.isDefault)?.model;
+          cursor = page.nextCursor ?? undefined;
+          if (cursor && (typeof cursor !== 'string' || cursors.has(cursor) || cursors.size >= 10)) throw new Error('Invalid Codex model pagination');
+          if (cursor) cursors.add(cursor);
+        } while (cursor);
+        if (turn.model === null) model = defaultModel;
+        if (turn.effort === null) {
+          const selected = models.find(item => item.id === (model ?? defaultModel));
+          const configured = effective.config.model_reasoning_effort;
+          effort = typeof configured === 'string' && (!selected || selected.efforts.includes(configured)) ? configured : selected?.defaultEffort;
+        }
+        if ((turn.model === null && !model) || (turn.effort === null && !effort)) throw new Error('Cannot resolve Codex defaults for this model. Select an explicit model and reasoning effort.');
+      }
+      const config = { cwd: turn.cwd, model, approvalPolicy: 'never', sandbox: turn.writable ? 'workspace-write' : 'read-only',
         config: { features: Object.fromEntries(DISABLED_FEATURES.map(feature => [feature, false])) } };
       const thread = await request(turn.sessionId ? 'thread/resume' : 'thread/start', turn.sessionId ? { ...config, threadId: turn.sessionId } : config);
       threadId = thread.thread?.id;
@@ -118,7 +140,7 @@ export class CodexProvider implements AgentProvider {
         }
       }
       const started = await request('turn/start', {
-        threadId, cwd: turn.cwd, model: turn.model, approvalPolicy: 'never',
+        threadId, cwd: turn.cwd, model, effort, approvalPolicy: 'never',
         sandboxPolicy: turn.writable
           ? { type: 'workspaceWrite', writableRoots: [turn.cwd], networkAccess: false, excludeTmpdirEnvVar: true, excludeSlashTmp: true }
           : { type: 'readOnly', networkAccess: false },

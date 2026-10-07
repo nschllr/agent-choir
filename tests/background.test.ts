@@ -25,6 +25,8 @@ async function setup(instances = false) {
     setRecipient(to) { view.recipient = to; notify(); }, setDelivery(mode) { view.delivery = mode; notify(); },
     addAgent: vi.fn(async provider => { view.session.agents?.push({ id: 'agent-2', provider }); view.streams['agent-2'] = ''; view.busy['agent-2'] = false; notify(); }),
     setInitialAgent: vi.fn(async provider => { view.session.agents![0]!.provider = provider; notify(); }),
+    getModelOptions: vi.fn(async () => ({ models: [{ id: 'model-a', name: 'A', efforts: ['low', 'high'] }] })),
+    setModelSettings: vi.fn(async (agent, settings) => { view.session.models = { ...view.session.models, [agent]: settings.model }; view.session.efforts = { ...view.session.efforts, [agent]: settings.effort }; notify(); }),
     resolve: vi.fn(async () => {}), close: vi.fn(async () => {}),
   };
   const server = await serveController(controller, directory, view.session.id);
@@ -32,6 +34,18 @@ async function setup(instances = false) {
   return { directory, controller, view, server };
 }
 describe('background transport', () => {
+  it('queries model options and persists per-instance settings through an attached UI', async () => {
+    const { directory, controller, view } = await setup(true);
+    const client = await connectController(directory, view.session.id);
+    cleanups.push(async () => client.disconnect());
+    expect((await client.getModelOptions!('agent-1')).models[0].efforts).toEqual(['low', 'high']);
+    await client.setModelSettings!('agent-1', { model: 'model-a', effort: 'high' });
+    expect(controller.setModelSettings).toHaveBeenCalledWith('agent-1', { model: 'model-a', effort: 'high' });
+    expect(client.getView().session).toMatchObject({ models: { 'agent-1': 'model-a' }, efforts: { 'agent-1': 'high' } });
+    await expect(client.setModelSettings!('both', { model: null, effort: null })).rejects.toThrow('invalid arguments');
+    await expect(client.setModelSettings!('agent-1', { model: '-flag', effort: null })).rejects.toThrow('invalid arguments');
+    expect(controller.setModelSettings).toHaveBeenCalledTimes(1);
+  });
   it('routes commands and broadcasts view updates to attached peers', async () => {
     const { directory, controller, view } = await setup();
     const client = await connectController(directory, view.session.id);

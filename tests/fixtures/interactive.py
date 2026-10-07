@@ -126,6 +126,15 @@ try:
             receive(0.3)
             send("\x1b[<0;10;21M")  # Second pane now stacks underneath the first.
             expect("To Codex 2")
+        if sys.argv[4] == "interactive":
+            send("\x12")
+            expect("Model & reasoning")
+            expect("Offline demo model", clear=False)
+            send("\x1b[B")
+            send("\x1b[C")
+            expect("Reasoning effort: low")
+            send("\r")
+            expect("applies next turn")
         send("\x19")
         expect("COPY MODE", clear=False)
         expect("\x1b[?1000l", clear=False)

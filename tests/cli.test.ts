@@ -124,12 +124,15 @@ describe('built CLI offline smoke', () => {
   it('persists explicit models, preserves them on resume, and allows a single-provider override', async () => {
     const directory = await mkdtemp('/tmp/duet-cli-models-');
     try {
-      const created = JSON.parse((await cli(['--demo', '--headless', '--json', '--state-dir', directory, '--claude-model', 'haiku', '--codex-model', 'test-codex-model'])).stdout);
+      const created = JSON.parse((await cli(['--demo', '--headless', '--json', '--state-dir', directory, '--claude-model', 'haiku', '--codex-model', 'test-codex-model', '--claude-effort', 'low', '--codex-effort', 'high'])).stdout);
       expect(created.models).toEqual({ claude: 'haiku', codex: 'test-codex-model' });
+      expect(created.efforts).toEqual({ claude: 'low', codex: 'high' });
       const resumed = JSON.parse((await cli(['--resume', created.id, '--headless', '--json', '--state-dir', directory])).stdout);
       expect(resumed.models).toEqual(created.models);
-      const changed = JSON.parse((await cli(['--resume', created.id, '--headless', '--json', '--state-dir', directory, '--claude-model', 'claude-haiku-4-5'])).stdout);
+      expect(resumed.efforts).toEqual(created.efforts);
+      const changed = JSON.parse((await cli(['--resume', created.id, '--headless', '--json', '--state-dir', directory, '--claude-model', 'claude-haiku-4-5', '--codex-effort', 'default'])).stdout);
       expect(changed.models).toEqual({ claude: 'claude-haiku-4-5', codex: 'test-codex-model' });
+      expect(changed.efforts).toEqual({ claude: 'low', codex: null });
       const store = new SessionStore(directory);
       try { expect(store.load(created.id)?.models).toEqual(changed.models); } finally { store.close(); }
       for (const model of ['', 'with spaces', '--invalid', 'x'.repeat(129)]) {

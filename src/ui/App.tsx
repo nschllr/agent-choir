@@ -8,11 +8,13 @@ import { historyStart, transcriptRows, visibleCodeBlocks, type HistoryAnchor, ty
 import { composerLayout, nextCursor, previousCursor } from './composer.js';
 import { containsMouse, type MouseEvents, type MouseEvent, type PaneHandle } from './mouse.js';
 import { CopyView, copySnapshot, type CopySnapshot } from './CopyView.js';
+import { ModelPicker } from './ModelPicker.js';
+import type { ModelSettings } from '../types.js';
 
 export interface AppProps { controller: UIController; onExit?: () => void; mouse?: MouseEvents }
 const paneColors = ['cyan', 'magenta'] as const;
 const colorFor = (view: ViewState, agent: AgentId) => paneColors[Math.max(0, sessionAgents(view.session).findIndex(item => item.id === agent)) % paneColors.length]!;
-const help = 'PgUp/PgDn scroll · Ctrl+F pane · Ctrl+X code · Ctrl+Y copy · /help';
+const help = 'Ctrl+R model · Ctrl+Y copy · Ctrl+F pane · PgUp/PgDn scroll · /help';
 
 function StyledRow({ row, agent, view, selected }: { row: TranscriptRow; agent: AgentId; view: ViewState; selected: boolean }) {
   const peer = row.from !== agent && row.from !== 'user' && row.from !== 'system';
@@ -94,8 +96,8 @@ function AgentPane({ agent, view, width, height, tools, focused, scrolling, pane
   const rows = transcriptRows(session, agent, stream, width - 4, expanded);
   const activity = session.activities.filter(item => item.agent === agent);
   const recent = activity.at(-1);
-  const toolRows = tools ? Math.min(4, Math.max(0, height - (height >= 7 ? 6 : 5))) : 0;
-  const count = Math.max(1, height - (height >= 7 ? 5 : 4) - toolRows);
+  const toolRows = tools ? Math.min(4, Math.max(0, height - (height >= 8 ? 7 : height >= 7 ? 6 : 5))) : 0;
+  const count = Math.max(1, height - (height >= 8 ? 6 : height >= 7 ? 5 : 4) - toolRows);
   const start = historyStart(rows, anchor, count);
   const end = Math.min(rows.length, start + count);
   const blocks = visibleCodeBlocks(rows, start, end);
@@ -146,6 +148,7 @@ function AgentPane({ agent, view, width, height, tools, focused, scrolling, pane
       <Text bold color={colorFor(view, agent)}>{focused ? '▸ ' : ''}{agentName(session, agent)}</Text>
       <Text dimColor>{view.busy[agent] ? 'working' : session.awaitingInput ? 'ready' : session.finished[agent] ? 'finished' : 'ready'}</Text>
     </Box>
+    {height >= 8 && <Text dimColor wrap="truncate">{session.models?.[agent] ?? 'Native model'} · {session.efforts?.[agent] ?? 'default effort'}{view.busy[agent] ? ' · next turn settings' : ''}</Text>}
     {height >= 7 && <Text dimColor wrap="truncate">{recent ? terminalText(recent.text).replace(/\n/g, ' ') : 'Ready for your message'}</Text>}
     <Box height={count} flexDirection="column" overflow="hidden">
       <Text wrap="truncate">{rows.slice(start, end).map((row, index) => <Text key={`${row.source}:${row.offset}`}>{index ? '\n' : ''}<StyledRow row={row} agent={agent} view={view} selected={focused && row.code?.id === target?.id}/></Text>)}</Text>
@@ -210,10 +213,11 @@ export function App({ controller, onExit, mouse }: AppProps) {
   const focusedAgent = roster.some(agent => agent.id === scrollAgent) ? scrollAgent : roster[0]!.id;
   const [closing, setClosing] = useState<'close' | 'detach' | null>(null);
   const [copy, setCopy] = useState<CopySnapshot | null>(null);
+  const [modelAgent, setModelAgent] = useState<AgentId | null>(null);
   const panes = useRef(new Map<AgentId, PaneHandle>());
   useEffect(() => {
     const receive = (event: MouseEvent) => {
-      if (picker || closing || copy || event.x >= size.width || event.y >= size.height - 1) return;
+      if (picker || closing || copy || modelAgent || event.x >= size.width || event.y >= size.height - 1) return;
       for (const [agent, pane] of panes.current) {
         if (!containsMouse(pane.node, event)) continue;
         if (event.action === 'click') {
@@ -225,8 +229,14 @@ export function App({ controller, onExit, mouse }: AppProps) {
     };
     mouse?.on('mouse', receive);
     return () => { mouse?.off('mouse', receive); };
-  }, [mouse, picker, closing, copy, collaboration, controller, size]);
+  }, [mouse, picker, closing, copy, modelAgent, collaboration, controller, size]);
   const openCopy = () => setCopy(copySnapshot(view.session, focusedAgent, view.streams[focusedAgent] || '', panes.current.get(focusedAgent)?.source()));
+  const saveModel = async (agent: AgentId, settings: ModelSettings) => {
+    if (!controller.setModelSettings) throw new Error('Model settings are unavailable in this session.');
+    await controller.setModelSettings(agent, settings);
+    setModelAgent(null);
+    setNotice(`${agentName(view.session, agent)} · ${settings.model ?? 'native model'} · ${settings.effort ?? 'default effort'} · applies next turn`);
+  };
   useEffect(() => {
     const resize = () => setSize({ width: stdout.columns || 100, height: stdout.rows || 32 });
     stdout.on('resize', resize);
@@ -285,8 +295,15 @@ export function App({ controller, onExit, mouse }: AppProps) {
     if (!text) return;
     if (text.startsWith('/')) {
       const [command, ...args] = text.split(/\s+/);
-      if (command === '/help') setNotice('Ctrl+Y or /copy: frozen single-pane text selection; Esc returns. Wheel scrolls the hovered pane; click focuses and selects a direct recipient. PgUp/PgDn scroll; Home/End oldest/latest; Alt+↑/↓ one line; Ctrl+F scroll pane. Ctrl+X expands/collapses visible code; Ctrl+K selects the next visible code block. Ctrl+B toggles collaboration; Enter submits. /collaborate [TASK] /chat /split [codex|claude] /agent [codex|claude] /pause /resume /to <agent name>|both /steer queued|immediate /resolve ID resolution /accept evidence /detach /quit');
+      if (command === '/help') setNotice('Ctrl+R or /model: focused peer model/effort; /effort LEVEL changes reasoning. Ctrl+Y or /copy: frozen single-pane text selection; Esc returns. Wheel scrolls the hovered pane; click focuses and selects a direct recipient. PgUp/PgDn scroll; Home/End oldest/latest; Alt+↑/↓ one line; Ctrl+F scroll pane. Ctrl+X expands/collapses visible code; Ctrl+K selects the next visible code block. Ctrl+B toggles collaboration; Enter submits. /collaborate [TASK] /chat /split [codex|claude] /agent [codex|claude] /pause /resume /to <agent name>|both /steer queued|immediate /resolve ID resolution /accept evidence /detach /quit');
       else if (command === '/copy') openCopy();
+      else if (command === '/model' || command === '/effort') {
+        if (!args.length) setModelAgent(focusedAgent);
+        else if (args.length === 1) run(() => saveModel(focusedAgent, command === '/model'
+          ? { model: args[0] === 'default' ? null : args[0], effort: null }
+          : { model: view.session.models?.[focusedAgent] ?? null, effort: args[0] === 'default' ? null : args[0] }));
+        else { setNotice('Use /model MODEL_ID or /effort LEVEL for the focused pane. Omit the argument to open the selector.'); return; }
+      }
       else if (command === '/collaborate') {
         if (args.length ? !collaborate(args.join(' ')) : !selectCollaboration(true)) return;
       }
@@ -346,6 +363,7 @@ export function App({ controller, onExit, mouse }: AppProps) {
       return;
     }
     if (key.ctrl && input === 'c') { close(); return; }
+    if (modelAgent) return;
     if (picker) {
       if (choosing) return;
       if (key.escape) { setPicker(null); return; }
@@ -357,6 +375,7 @@ export function App({ controller, onExit, mouse }: AppProps) {
     }
     if (key.ctrl && input === 'n') { openPicker('add'); return; }
     if (key.ctrl && input === 'y') { openCopy(); return; }
+    if (key.ctrl && input === 'r') { setModelAgent(focusedAgent); return; }
     if (key.ctrl && input === 'g') { openPicker('initial'); return; }
     if (key.ctrl && input === 'b') {
       selectCollaboration(!collaboration);
@@ -402,11 +421,11 @@ export function App({ controller, onExit, mouse }: AppProps) {
   const reserved = 8 + composerLines + (decision ? decision.status === 'waiting_user' ? 7 : 6 : 0) + (integration ? 5 : 0) + (notice ? 1 : 0) + (picker?.mode === 'initial' ? 6 : 0);
   const paneHeight = Math.max(5, Math.floor((size.height - reserved) / (narrow ? paneCount : 1)));
   const minutes = Math.floor(view.session.elapsedMs / 60_000);
-  return <><Box display={copy ? 'none' : 'flex'} flexDirection="column" width={width} height={Math.max(1, size.height - 1)} overflow="hidden">
+  return <><Box display={copy || modelAgent ? 'none' : 'flex'} flexDirection="column" width={width} height={Math.max(1, size.height - 1)} overflow="hidden">
     <Box justifyContent="space-between" flexShrink={0}><Text bold wrap="truncate">AGENT DUET <Text dimColor>· {isCollaborating(view.session) ? 'collaborating' : 'chat'} · {view.session.scope === 'build' && !view.session.demo ? 'edits enabled' : 'read-only'}</Text>{view.session.demo && <Text color="yellow"> · OFFLINE DEMO</Text>}</Text><Text color={view.session.status === 'running' ? 'green' : 'yellow'}>{closing === 'close' ? 'pausing and closing' : closing === 'detach' ? 'detaching · work continues' : view.session.awaitingInput ? 'ready' : view.session.status.replace('_', ' ')}</Text></Box>
     <Text dimColor wrap="truncate">{terminalText(view.session.project)} · {terminalText(view.session.id)} · turns {view.session.turns}/{view.session.maxTurns} · {minutes}/{view.session.maxMinutes} min</Text>
     <Box flexDirection={narrow ? 'column' : 'row'} flexShrink={0}>
-      {roster.map((agent, index) => <AgentPane key={agent.id} agent={agent.id} view={view} width={narrow || paneCount === 1 ? width : index === paneCount - 1 ? width - paneWidth : paneWidth} height={paneHeight} tools={tools} focused={focusedAgent === agent.id} scrolling={!picker && !closing && !copy} panes={panes.current}/>)}
+      {roster.map((agent, index) => <AgentPane key={agent.id} agent={agent.id} view={view} width={narrow || paneCount === 1 ? width : index === paneCount - 1 ? width - paneWidth : paneWidth} height={paneHeight} tools={tools} focused={focusedAgent === agent.id} scrolling={!picker && !closing && !copy && !modelAgent} panes={panes.current}/>)}
       {picker?.mode === 'add' && <AgentPicker provider={picker.provider} width={narrow ? width : width - paneWidth} height={paneHeight} choosing={choosing}/>}
 
     </Box>
@@ -419,5 +438,8 @@ export function App({ controller, onExit, mouse }: AppProps) {
     </Box>
     {notice && <Text color="yellow" wrap="truncate">{notice}</Text>}
     <Text dimColor wrap="truncate">{view.session.status === 'complete' ? 'Round complete · send a follow-up to continue · /quit or Ctrl+C exits' : help}</Text>
-  </Box>{copy && <CopyView snapshot={copy} width={width} height={Math.max(1, size.height - 1)} mouse={mouse}/>}</>;
+  </Box>{copy && <CopyView snapshot={copy} width={width} height={Math.max(1, size.height - 1)} mouse={mouse}/>}
+  {modelAgent && <ModelPicker controller={controller} agent={modelAgent} name={agentName(view.session, modelAgent)} provider={roster.find(agent => agent.id === modelAgent)!.provider}
+    initial={{ model: view.session.models?.[modelAgent] ?? null, effort: view.session.efforts?.[modelAgent] ?? null }} width={width} height={Math.max(5, size.height - 1)}
+    save={settings => saveModel(modelAgent, settings)} cancel={() => setModelAgent(null)}/>}</>;
 }

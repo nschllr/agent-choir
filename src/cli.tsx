@@ -13,6 +13,7 @@ import { DemoProvider } from './demo.js';
 import { ClaudeProvider, CodexProvider } from './providers/index.js';
 import { runTerminal } from './ui/terminal.js';
 import { resumeCommand } from './resume-command.js';
+import { validModel, claudeEfforts, codexEfforts } from './model-settings.js';
 import { agentName, isProvider, sessionAgents } from './agents.js';
 import { terminalText } from './ui/text.js';
 import { connectController, serveController } from './background.js';
@@ -46,11 +47,14 @@ Options:
   --max-minutes N              Active-time allowance (default 30)
   --claude-model MODEL         Claude model alias or ID (saved with session)
   --codex-model MODEL          Codex model ID (saved with session)
+  --claude-effort LEVEL        Claude effort (low, medium, high, xhigh, max, default)
+  --codex-effort LEVEL         Codex reasoning effort (saved with session)
 
 Controls:
   Ctrl+N add agent · Ctrl+G initial agent · Tab recipient · Ctrl+S steering
   Ctrl+B toggle collaboration · Ctrl+P pause/resume · Ctrl+O tools
   Ctrl+Y copy focused pane · Esc leaves copy mode · /copy
+  Ctrl+R model/effort for focused pane · /model · /effort
   Enter send · Alt+Enter/Ctrl+J newline · Ctrl+C pause/exit
   PgUp/PgDn scroll · Alt+Up/Down one line · Home/End oldest/latest · Ctrl+F scroll pane
   /help /split /agent /collaborate [TASK] /chat /pause /resume /to /steer /resolve ID choice /accept evidence /detach /quit
@@ -65,7 +69,7 @@ function positive(value: string | undefined, label: string): number | undefined 
   const n = Number(value); if (!Number.isFinite(n) || n <= 0 || (label === '--max-turns' && !Number.isSafeInteger(n))) throw new Error(`${label} must be a positive${label === '--max-turns' ? ' integer' : ' number'}`); return n;
 }
 function modelOption(value: string | undefined, label: string): string | undefined {
-  if (value !== undefined && !/^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$/.test(value)) throw new Error(`${label} must be a nonempty model alias or ID (up to 128 characters)`);
+  if (value !== undefined && !validModel(value)) throw new Error(`${label} must be a nonempty model alias or ID (up to 128 characters)`);
   return value;
 }
 function doctor(): void {
@@ -83,7 +87,7 @@ async function main(): Promise<void> {
     doctor: { type: 'boolean' }, list: { type: 'boolean' }, detach: { type: 'boolean' }, 'worker-start': { type: 'boolean' },
     project: { type: 'string' }, scope: { type: 'string' }, 'read-only': { type: 'boolean' }, brief: { type: 'string' }, resume: { type: 'string' }, attach: { type: 'string' }, worker: { type: 'string' },
     'state-dir': { type: 'string' }, 'max-turns': { type: 'string' }, 'max-minutes': { type: 'string' },
-    'claude-model': { type: 'string' }, 'codex-model': { type: 'string' },
+    'claude-model': { type: 'string' }, 'codex-model': { type: 'string' }, 'claude-effort': { type: 'string' }, 'codex-effort': { type: 'string' },
     agent: { type: 'string' }, peer: { type: 'string' },
     collaborate: { type: 'boolean' },
   } });
@@ -96,6 +100,15 @@ async function main(): Promise<void> {
   if ((values.resume || values.attach || values.worker) && (values.agent || values.peer)) throw new Error('Saved sessions keep their agent instances; use the in-app agent picker to add a peer');
   if (values.collaborate && (values.resume || values.attach || values.worker)) throw new Error('Use /collaborate TASK in a saved session to start a new shared task');
   const selectedModels = { claude: modelOption(values['claude-model'], '--claude-model'), codex: modelOption(values['codex-model'], '--codex-model') };
+  const selectedEfforts: Partial<Record<ProviderKind, string | null>> = {};
+  for (const provider of ['claude', 'codex'] as const) {
+    const effort = values[`${provider}-effort`];
+    if (effort !== undefined) {
+      if (effort !== 'default' && !(provider === 'claude' ? claudeEfforts : codexEfforts).includes(effort)) throw new Error(`Invalid --${provider}-effort`);
+      selectedEfforts[provider] = effort === 'default' ? null : effort;
+    }
+  }
+  if (values.attach && Object.keys(selectedEfforts).length) throw new Error('Use the in-app model selector to change effort for an attached session');
   if (values.attach && Object.values(selectedModels).some(model => model !== undefined)) throw new Error('Model overrides require --resume or a new session; --attach uses the running worker’s saved models');
   const stateDir = resolve(values['state-dir'] ?? join(process.env.XDG_STATE_HOME ?? join(homedir(), '.local', 'state'), 'agent-duet'));
   if (values.attach) {
@@ -140,10 +153,14 @@ async function main(): Promise<void> {
       session.providerModels = { ...session.providerModels, [provider]: selectedModels[provider] };
       for (const agent of sessionAgents(session).filter(agent => agent.provider === provider)) session.models = { ...session.models, [agent.id]: selectedModels[provider] };
     }
+    for (const provider of ['claude', 'codex'] as const) if (selectedEfforts[provider] !== undefined) {
+      session.providerEfforts = { ...session.providerEfforts, [provider]: selectedEfforts[provider] };
+      for (const agent of sessionAgents(session).filter(agent => agent.provider === provider)) session.efforts = { ...session.efforts, [agent.id]: selectedEfforts[provider] };
+    }
     const factory = (agent: AgentConfig): AgentProvider => {
       if (session.demo) return new DemoProvider(agent.id);
       const native = agent.provider === 'claude' ? new ClaudeProvider() : new CodexProvider();
-      return { id: agent.id, run: native.run.bind(native), dispose: native.dispose.bind(native) };
+      return { id: agent.id, run: native.run.bind(native), dispose: native.dispose.bind(native), listModels: native.listModels.bind(native) };
     };
     controller = new DuetController(session, Object.fromEntries(sessionAgents(session).map(agent => [agent.id, factory(agent)])), store, new GitWorkspaceManager(stateDir), factory, new ContextMemory(stateDir));
     const launchWorker = async () => {

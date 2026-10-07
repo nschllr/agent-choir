@@ -6,6 +6,9 @@ export interface AgentConfig { id: AgentId; provider: ProviderKind; }
 export type Scope = 'discuss' | 'plan' | 'build';
 export type Recipient = AgentId | 'both';
 export type Delivery = 'queued' | 'immediate';
+export interface ModelSettings { model: string | null; effort: string | null }
+export interface ModelOption { id: string; name: string; efforts: string[]; defaultEffort?: string }
+export interface ModelCatalog { models: ModelOption[]; defaultModel?: string; notice?: string }
 export type Position = 'accept' | 'object' | 'evidence';
 export interface TaskSpec { id: string; owner: AgentId; description: string; dependsOn: string[]; }
 export interface Decision {
@@ -45,10 +48,12 @@ export interface Session {
   contextCursors?: Partial<Record<AgentId, ContextCursor>>;
   /** Input revision at which an instance yielded without a message or action. */
   yieldedInputs?: Partial<Record<AgentId, string>>;
-  models?: Partial<Record<AgentId, string>>;
+  models?: Partial<Record<AgentId, string | null>>;
+  efforts?: Partial<Record<AgentId, string | null>>;
   /** Missing only in legacy two-provider sessions. */
   agents?: AgentConfig[];
   providerModels?: Partial<Record<ProviderKind, string>>;
+  providerEfforts?: Partial<Record<ProviderKind, string | null>>;
   /** Idle composer, distinguished from an explicit user pause. */
   awaitingInput?: boolean;
   /** Chat replies only to addressed user messages; collaboration is explicitly started. */
@@ -60,7 +65,7 @@ export interface Session {
 }
 export interface ProviderTurn {
   agent: AgentId; prompt: string; cwd: string; writable: boolean;
-  sessionId?: string; model?: string; title?: string; signal: AbortSignal;
+  sessionId?: string; model?: string | null; effort?: string | null; title?: string; signal: AbortSignal;
 }
 export type ProviderEvent =
   | { type: 'text'; text: string }
@@ -71,6 +76,7 @@ export type ProviderEvent =
 export interface AgentProvider {
   readonly id: AgentId;
   run(turn: ProviderTurn, emit: (event: ProviderEvent) => void): Promise<AgentReply>;
+  listModels?(cwd: string): Promise<ModelCatalog>;
   dispose(): Promise<void>;
 }
 export interface WorkspaceAccess { cwd: string; writable: boolean; }
@@ -95,6 +101,8 @@ export interface UIController {
   setDelivery(mode: Delivery): void;
   addAgent?(provider: ProviderKind): Promise<void>;
   setInitialAgent?(provider: ProviderKind): Promise<void>;
+  getModelOptions?(agent: AgentId): Promise<ModelCatalog>;
+  setModelSettings?(agent: AgentId, settings: ModelSettings): Promise<void>;
   resolve(id: string, resolution: string): Promise<void>;
   acceptIntegration?(notes: string): Promise<void>;
   detach?(): Promise<void>;

@@ -57,6 +57,11 @@ It does create local session state at the selected state path.
 An additional offline PTY check on 2026-10-07 forced terminal colors and verified
 green user text, cyan Codex text, the live-position indicator, and clean exit.
 
+A native Codex catalog check on 2026-10-07 returned eight model choices with
+their supported effort levels and the configured default. This queried metadata
+only; it created no conversation or model turn. The offline PTY regression also
+opens the model picker, changes model/effort, and saves without submitting a task.
+
 For lifecycle checks, start a demo with `--detach`, attach using the printed session
 id, pause/resume, detach again, and reconnect. Ordinary exit from an attached UI
 should pause work; explicit `/detach` should leave the worker running. List/resume
@@ -86,6 +91,11 @@ boundaries, opaque strings/comments, and source preservation. Folding checks cov
 five source lines, wrapped/blank lines, long/tilde fences, incomplete streaming
 blocks, visible block selection, per-pane expansion, unchanged composer/routing,
 and transferring expansion when streamed output becomes a saved reply. Controller
+and model-setting tests cover per-peer persistence, changes during an active turn,
+default resets, catalog effort validation, native model discovery without model
+turns, and background transport. UI checks cover picker navigation, custom IDs,
+cancellation, draft preservation, and explicit commands. CLI checks verify saved
+effort selections on resume and independent provider overrides. Controller
 tests also cover concurrent replies to both (including two Codex instances),
 delivery to an idle peer during an active turn, independent completion and follow-up,
 turn reservations, persisted recipient queues, steering,

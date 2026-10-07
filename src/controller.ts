@@ -1,5 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { nativeSessionTitle } from './session-label.js';
+import { claudeEfforts, codexEfforts, fallbackCatalog, validModelSettings } from './model-settings.js';
+import type { ModelCatalog, ModelSettings } from './types.js';
 import { applyReply, canImplement, resolveDecision } from './engine.js';
 import { buildContextDelivery, contextHash, contextMessages, hasPendingContext, messageHash } from './context-delivery.js';
 import type { ContextMemory } from './context-memory.js';
@@ -17,6 +19,7 @@ interface Workspaces extends WorkspaceManager {
   merge?(session: Session): Promise<{ path: string; conflicts: boolean }>;
 }
 export class DuetController implements UIController {
+  private catalogs = new Map<AgentId, Promise<ModelCatalog>>();
   private state: ViewState;
   private listeners = new Set<() => void>();
   private running?: Promise<void>;
@@ -47,6 +50,34 @@ export class DuetController implements UIController {
     this.save();
   }
   private ids(): AgentId[] { return agentIds(this.state.session); }
+  async getModelOptions(agent: AgentId): Promise<ModelCatalog> {
+    const config = sessionAgents(this.state.session).find(item => item.id === agent);
+    if (this.closed || !config) throw new Error('Unknown or closed agent');
+    if (this.state.session.demo) return { models: [{ id: `demo-${config.provider}`, name: 'Offline demo model', efforts: ['low', 'medium', 'high'], defaultEffort: 'medium' }], defaultModel: `demo-${config.provider}`, notice: 'Offline demo; no native model queries or calls.' };
+    if (!this.catalogs.has(agent)) {
+      const query = this.providers[agent].listModels?.(this.state.session.project) ?? Promise.resolve(fallbackCatalog(config.provider));
+      this.catalogs.set(agent, query.catch(() => {
+        this.catalogs.delete(agent);
+        return { ...fallbackCatalog(config.provider), notice: 'Native model discovery failed. Enter a model ID or keep defaults; check the installed CLI and login.' };
+      }));
+    }
+    return this.catalogs.get(agent)!;
+  }
+  async setModelSettings(agent: AgentId, settings: ModelSettings): Promise<void> {
+    if (!validModelSettings(settings)) throw new Error('Invalid model or reasoning effort settings');
+    const provider = this.providers[agent];
+    const catalog = await this.getModelOptions(agent);
+    if (this.closed || this.rosterChanging || this.providers[agent] !== provider) throw new Error('Agent changed while choosing model settings');
+    const config = sessionAgents(this.state.session).find(item => item.id === agent)!;
+    const model = catalog.models.find(item => item.id === (settings.model ?? catalog.defaultModel));
+    const levels = model?.efforts ?? (config.provider === 'claude' ? claudeEfforts : codexEfforts);
+    if (settings.effort !== null && !levels.includes(settings.effort)) throw new Error('That reasoning effort is not supported by the selected model');
+    this.state.session.models ??= {}; this.state.session.efforts ??= {};
+    this.state.session.models[agent] = settings.model;
+    this.state.session.efforts[agent] = settings.effort;
+    // Changes affect future snapshots, without interrupting a running native turn or waking a peer.
+    this.save();
+  }
   private validateRecipient(to: Recipient): void { if (to !== 'both' && !this.ids().includes(to)) throw new Error('Unknown message recipient'); }
   private successor(agent: AgentId): AgentId { const ids = this.ids(); return ids[(ids.indexOf(agent) + 1) % ids.length]!; }
   async setInitialAgent(provider: ProviderKind): Promise<void> {
@@ -57,10 +88,13 @@ export class DuetController implements UIController {
     try {
       const id = this.ids()[0]!, config = { id, provider }, replacement = this.providerFactory(config);
       await this.providers[id]!.dispose(); this.providers[id] = replacement;
+      this.catalogs.delete(id);
       this.state.session.agents = [config]; delete this.state.session.providerSessions[id];
       if (this.state.session.contextCursors) delete this.state.session.contextCursors[id];
       if (this.state.session.yieldedInputs) delete this.state.session.yieldedInputs[id];
       this.state.session.models ??= {}; delete this.state.session.models[id];
+      this.state.session.efforts ??= {}; delete this.state.session.efforts[id];
+      if (this.state.session.providerEfforts?.[provider] !== undefined) this.state.session.efforts[id] = this.state.session.providerEfforts[provider];
       if (this.state.session.providerModels?.[provider]) this.state.session.models[id] = this.state.session.providerModels[provider];
       this.save();
     } finally { this.rosterChanging = false; }
@@ -84,6 +118,9 @@ export class DuetController implements UIController {
       this.state.session.agents = [...sessionAgents(this.state.session), config];
       this.state.streams[id] = ''; this.state.busy[id] = false;
       this.state.session.models ??= {};
+      if (this.state.session.providerEfforts?.[provider] !== undefined) {
+        this.state.session.efforts ??= {}; this.state.session.efforts[id] = this.state.session.providerEfforts[provider];
+      }
       if (this.state.session.providerModels?.[provider]) this.state.session.models[id] = this.state.session.providerModels[provider];
       this.state.session.finished = {};
       for (const decision of this.state.session.decisions) {
@@ -373,7 +410,7 @@ export class DuetController implements UIController {
       this.state.session.contextCursors[agent] = delivery.cursor;
       this.save();
       const prompt = delivery.prompt + (isCollaborating(snapshot) && initial && this.ids().length > 1 ? joining ? '\nJOINING EXISTING CONVERSATION: review the shared history and contribute your perspective. Do not propose or vote on decisions in this first turn. Yield if no peer response is needed, or finish if the exchange is complete.' : '\nINITIAL INDEPENDENT EXPLORATION: give your own initial thoughts. Do not propose or vote on decisions in this first turn. Yield if no peer response is needed, or finish if the exchange is complete; otherwise you will see your peer’s thoughts next.' : '') + (task && !isCollaborating(snapshot) ? `\nOnly if the user requests implementation, your authorized task is: ${JSON.stringify(task)}. Do not resume pending work merely because a task exists. Do not start sibling tasks.` : task ? `\nYour only active implementation task this turn: ${JSON.stringify(task)}. Do not start sibling tasks. Verify this task, then return complete_task for this id. Do not revise the accepted plan while implementing.` : '');
-      const reply = await this.providers[agent].run({ agent, prompt, ...workspace, sessionId: snapshot.providerSessions[agent], model: snapshot.models?.[agent], title: nativeSessionTitle(snapshot, agent), signal: abort.signal }, event => {
+      const reply = await this.providers[agent].run({ agent, prompt, ...workspace, sessionId: snapshot.providerSessions[agent], model: snapshot.models?.[agent], effort: snapshot.efforts?.[agent], title: nativeSessionTitle(snapshot, agent), signal: abort.signal }, event => {
         if (ticket !== this.tickets[agent] || abort.signal.aborted) return;
         if (event.type === 'text') { this.state.streams[agent] = (this.state.streams[agent] + event.text).slice(-40_000); this.notify(); }
         else if (event.type === 'activity') this.activity(agent, event.text, 'tool');

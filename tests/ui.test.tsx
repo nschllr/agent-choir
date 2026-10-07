@@ -8,7 +8,7 @@ import type { UIController, ViewState } from '../src/types.js';
 
 afterEach(cleanup);
 // Ink throttles terminal renders; allow a complete frame between key presses.
-const settle = () => new Promise(resolve => setTimeout(resolve, 60));
+const settle = () => new Promise(resolve => setTimeout(resolve, 100));
 
 function controllerFixture(solo = false): UIController {
   const listeners = new Set<() => void>();
@@ -42,6 +42,8 @@ function controllerFixture(solo = false): UIController {
       update({ session: { ...state.session, agents: [...agents, { id, provider }] } });
     }),
     setInitialAgent: vi.fn(async provider => update({ session: { ...state.session, agents: [{ id: provider, provider }] }, recipient: provider })),
+    getModelOptions: vi.fn(async () => ({ defaultModel: 'model-a', models: [{ id: 'model-a', name: 'Model A', efforts: ['low', 'high'] }, { id: 'model-b', name: 'Model B', efforts: ['medium'] }] })),
+    setModelSettings: vi.fn(async (agent, settings) => update({ session: { ...state.session, models: { ...state.session.models, [agent]: settings.model }, efforts: { ...state.session.efforts, [agent]: settings.effort } } })),
     setRecipient: vi.fn(to => update({ recipient: to })),
     setDelivery: vi.fn(delivery => update({ delivery })),
   };
@@ -59,6 +61,42 @@ describe('terminal text handling', () => {
 });
 
 describe('terminal collaboration workspace', () => {
+  it('selects a model and supported effort for the focused peer without sending or losing a draft', async () => {
+    const controller = controllerFixture();
+    const screen = render(<App controller={controller}/>); await settle();
+    screen.stdin.write('Draft remains'); await settle(); screen.stdin.write('\x12'); await settle();
+    expect(screen.lastFrame()).toContain('Model & reasoning · Claude');
+    await vi.waitFor(() => expect(screen.lastFrame()).toContain('Model A (model-a)'));
+    screen.stdin.write('\x1b[B'); await settle();
+    screen.stdin.write('\x1b[C'); await settle(); screen.stdin.write('\x1b[C'); await settle();
+    expect(screen.lastFrame()).toContain('Reasoning effort: high');
+    screen.stdin.write('\r'); await settle();
+    expect(controller.setModelSettings).toHaveBeenCalledWith('claude', { model: 'model-a', effort: 'high' });
+    expect(screen.lastFrame()).toContain('Draft remains');
+    expect(controller.send).not.toHaveBeenCalled(); expect(controller.setRecipient).not.toHaveBeenCalled();
+    screen.stdin.write('\x06'); await settle(); screen.stdin.write('\x12'); await settle();
+    expect(screen.lastFrame()).toContain('Model & reasoning · Codex');
+    screen.stdin.write('\x1b[B'); await settle(); screen.stdin.write('\x1b[B'); await settle();
+    screen.stdin.write('\x1b[C'); await settle();
+    expect(screen.lastFrame()).toContain('Reasoning effort: medium');
+    screen.stdin.write('\x1b'); await settle();
+    expect(controller.setModelSettings).toHaveBeenCalledTimes(1);
+    expect(screen.lastFrame()).toContain('Draft remains');
+  });
+  it('supports custom model IDs and explicit reset through commands', async () => {
+    const controller = controllerFixture(true);
+    const screen = render(<App controller={controller}/>); await settle();
+    screen.stdin.write('\x12'); await settle(); screen.stdin.write('\x1b[A'); await settle();
+    screen.stdin.write('\r'); await settle(); screen.stdin.write('custom-codex'); await settle();
+    screen.stdin.write('\r'); await settle(); screen.stdin.write('\x1b[C'); await settle();
+    screen.stdin.write('\r'); await settle();
+    expect(controller.setModelSettings).toHaveBeenLastCalledWith('codex', { model: 'custom-codex', effort: 'none' });
+    screen.stdin.write('/effort high'); await settle(); screen.stdin.write('\r'); await settle();
+    expect(controller.setModelSettings).toHaveBeenLastCalledWith('codex', { model: 'custom-codex', effort: 'high' });
+    screen.stdin.write('/model default'); await settle(); screen.stdin.write('\r'); await settle();
+    expect(controller.setModelSettings).toHaveBeenLastCalledWith('codex', { model: null, effort: null });
+    expect(controller.send).not.toHaveBeenCalled();
+  });
   it('freezes a single-pane copy view, disables mouse tracking, and preserves drafts and routing', async () => {
     const controller = controllerFixture(), mouse = new MouseEvents(), tracking = vi.fn();
     mouse.on('tracking', tracking);

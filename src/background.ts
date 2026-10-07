@@ -3,6 +3,7 @@ import { mkdir, chmod, lstat, unlink } from 'node:fs/promises';
 import { createConnection, createServer, type Socket } from 'node:net';
 import { join } from 'node:path';
 import { agentIds, isProvider } from './agents.js';
+import { validModelSettings } from './model-settings.js';
 import type { Delivery, Recipient, UIController, ViewState } from './types.js';
 
 const MAX_FRAME = 8 * 1024 * 1024;
@@ -54,6 +55,8 @@ async function dispatch(controller: Integrating, method: unknown, args: unknown)
     case 'setRecipient': if (args.length === 1 && recipients.includes(args[0])) return controller.setRecipient(args[0] as Recipient); break;
     case 'addAgent': if (args.length === 1 && isProvider(args[0]) && controller.addAgent) return controller.addAgent(args[0]); break;
     case 'setInitialAgent': if (args.length === 1 && isProvider(args[0]) && controller.setInitialAgent) return controller.setInitialAgent(args[0]); break;
+    case 'getModelOptions': if (args.length === 1 && recipients.includes(args[0]) && args[0] !== 'both' && controller.getModelOptions) return controller.getModelOptions(args[0]); break;
+    case 'setModelSettings': if (args.length === 2 && recipients.includes(args[0]) && args[0] !== 'both' && validModelSettings(args[1]) && controller.setModelSettings) return controller.setModelSettings(args[0], args[1]); break;
     case 'setDelivery': if (args.length === 1 && deliveries.includes(args[0])) return controller.setDelivery(args[0] as Delivery); break;
     case 'resolve': if (args.length === 2 && string(args[0], 200) && string(args[1])) return controller.resolve(args[0], args[1]); break;
     case 'acceptIntegration': if (args.length === 1 && string(args[0]) && controller.acceptIntegration) return controller.acceptIntegration(args[0]); break;
@@ -149,6 +152,8 @@ export async function connectController(stateDir: string, sessionId: string): Pr
     setRecipient(to) { set('setRecipient', to); }, setDelivery(mode) { set('setDelivery', mode); },
     async addAgent(provider) { await request('addAgent', [provider]); },
     async setInitialAgent(provider) { await request('setInitialAgent', [provider]); },
+    async getModelOptions(agent) { return await request('getModelOptions', [agent]) as import('./types.js').ModelCatalog; },
+    async setModelSettings(agent, settings) { await request('setModelSettings', [agent, settings]); },
     async resolve(id, resolution) { await request('resolve', [id, resolution]); },
     async acceptIntegration(notes) { await request('acceptIntegration', [notes]); },
     async close() { try { await request('close'); } finally { disconnected = true; socket.destroy(); } },

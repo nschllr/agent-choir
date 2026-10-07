@@ -12,6 +12,7 @@ interface Call {
   reject: (error: Error) => void;
 }
 class FakeProvider implements AgentProvider {
+  listModels = vi.fn(async () => ({ models: [{ id: 'model-a', name: 'A', efforts: ['low', 'high'], defaultEffort: 'low' }], defaultModel: 'model-a' }));
   calls: Call[] = [];
   ignoreAbort = false;
   automatic?: (call: Call, number: number) => void;
@@ -39,6 +40,38 @@ function setup(session?: Session) {
   return { controller, claude, codex, saved, store, workspaces };
 }
 const expectCalls = async (provider: FakeProvider, count: number) => { await vi.waitFor(() => expect(provider.calls).toHaveLength(count), { interval: 5, timeout: 1000 }); };
+
+describe('per-peer model and effort changes', () => {
+  it('saves an independent selection without waking agents and restores it on resume', async () => {
+    const { controller, saved, claude, codex } = setup();
+    await controller.setModelSettings('codex', { model: 'model-a', effort: 'high' });
+    expect(saved.at(-1)).toMatchObject({ models: { codex: 'model-a' }, efforts: { codex: 'high' } });
+    expect(claude.calls).toHaveLength(0); expect(codex.calls).toHaveLength(0);
+    const resumed = setup(saved.at(-1));
+    await resumed.controller.start(); await expectCalls(resumed.codex, 1);
+    expect(resumed.codex.calls[0].turn).toMatchObject({ model: 'model-a', effort: 'high' });
+    expect(resumed.claude.calls[0].turn.model).toBeUndefined();
+  });
+  it('leaves active requests intact and applies changed settings to the next turn only', async () => {
+    const session = createSession({ project: '/tmp', scope: 'discuss', brief: 'Hello', agents: [{ id: 'codex', provider: 'codex' }] });
+    const { controller, codex } = setup(session);
+    await controller.start(); await expectCalls(codex, 1);
+    await controller.setModelSettings('codex', { model: 'model-a', effort: 'high' });
+    expect(codex.calls[0].turn.model).toBeUndefined(); expect(codex.calls[0].turn.signal.aborted).toBe(false);
+    codex.calls[0].resolve(emptyReply()); await controller.wait();
+    await controller.send('Next question', 'codex'); await controller.start(); await expectCalls(codex, 2);
+    expect(codex.calls[1].turn).toMatchObject({ model: 'model-a', effort: 'high' });
+  });
+  it('validates supported effort before mutating settings and persists explicit resets', async () => {
+    const { controller, saved } = setup();
+    await expect(controller.setModelSettings('missing', { model: null, effort: null })).rejects.toThrow('Unknown');
+    await expect(controller.setModelSettings('codex', { model: 'model-a', effort: 'medium' })).rejects.toThrow('not supported');
+    expect(controller.getView().session.models).toBeUndefined();
+    await controller.setModelSettings('codex', { model: 'model-a', effort: 'low' });
+    await controller.setModelSettings('codex', { model: null, effort: null });
+    expect(saved.at(-1)).toMatchObject({ models: { codex: null }, efforts: { codex: null } });
+  });
+});
 
 describe('yielding and idle collaboration', () => {
   it.each(['', '  \n\t'])('stops empty-response loops and stays idle on resume (%j)', async message => {

@@ -158,6 +158,39 @@ with the session and reused on resume and detach; `--resume` can override either
 selection while preserving the other. `--attach` uses the running worker's models.
 Provider model preferences also apply to an agent added later with the picker.
 The offline demo accepts these options for testing persistence but makes no calls.
+
+Press **Ctrl+R** or enter `/model` to configure the focused pane's model and
+reasoning effort. Use **Up/Down** to select a model, **Left/Right** to choose effort,
+and **Enter** to save; **Esc** cancels. Select **Custom model ID** to enter a specific
+version. Your draft and message recipient stay unchanged. Ctrl+F changes the focused
+pane before opening the selector; each peer has independent settings, including
+two peers using the same provider.
+
+Changes apply on the next native turn, preserve conversation history, and persist
+through resume, detach, and attach. Running turns finish with their original
+settings. Each pane shows the requested model/effort; the native CLI may enforce
+account or organization limits. Choosing **Native default** clears the harness
+override. Changing models resets the effort choice so an incompatible level is not
+carried over.
+
+Codex choices and supported efforts come from the native
+[`model/list` catalog](https://learn.chatgpt.com/docs/app-server#list-models-modellist).
+Opening the picker queries metadata without creating a conversation or consuming
+a model turn. Claude choices use native aliases and the CLI's effort levels;
+[availability and effort limits](https://code.claude.com/docs/en/model-config)
+depend on the native installation and account. If discovery fails, custom IDs and
+native defaults remain available. An unknown custom Codex model may require an
+explicit effort if its default cannot be resolved from the native catalog.
+
+Commands also target the focused pane: `/model MODEL_ID`, `/model default`,
+`/effort LEVEL`, and `/effort default`. The startup flags `--claude-effort LEVEL`
+and `--codex-effort LEVEL` set saved defaults for instances of that provider;
+`default` clears an effort override. For example:
+
+```sh
+agent-duet --agent codex --codex-model MODEL_ID --codex-effort high
+```
+
 For the inexpensive model used in the live smoke test, pin
 `--claude-model claude-haiku-4-5-20251001`. The six-turn real discussion completed
 automatically; see [observed results and remaining checks](docs/testing.md#observed-live-smoke-test--2026-10-06).
@@ -186,6 +219,7 @@ is available, the CLI announces headless mode and exits at completion instead.
 | Ctrl+P | Pause or resume |
 | Ctrl+O | Show or hide recent tool activity |
 | Ctrl+F | Switch the pane being scrolled; the message recipient stays unchanged |
+| Ctrl+R | Select model and reasoning effort for the focused pane |
 | Ctrl+Y or /copy | Open a frozen, single-column copy view of the focused pane; Esc/Ctrl+Y returns |
 | Mouse wheel | Scroll the pane under the pointer, without changing the recipient |
 | Click a pane | Focus it and select its agent for direct messages; collaboration still sends to both |
@@ -241,7 +275,7 @@ retain plain code formatting. Peer code remains muted gray, with structure and
 keyword emphasis. Backtick and tilde fences are supported, including unfinished
 blocks while a reply streams. Highlighting is lexical, not a full language parser.
 
-Commands: `/help`, `/copy`, `/split [codex|claude]`, `/agent [codex|claude]`, `/pause`, `/resume`, `/to <agent name>|both`,
+Commands: `/help`, `/copy`, `/model [MODEL_ID|default]`, `/effort [LEVEL|default]`, `/split [codex|claude]`, `/agent [codex|claude]`, `/pause`, `/resume`, `/to <agent name>|both`,
 `/collaborate [task]`, `/chat`, `/steer queued|immediate`, `/resolve ID resolution`, `/accept validation evidence`,
 `/detach`, and `/quit`.
 
