@@ -186,6 +186,8 @@ is available, the CLI announces headless mode and exits at completion instead.
 | Ctrl+P | Pause or resume |
 | Ctrl+O | Show or hide recent tool activity |
 | Ctrl+F | Switch the pane being scrolled; the message recipient stays unchanged |
+| Ctrl+X | Expand or collapse the selected visible code block in the focused pane |
+| Ctrl+K | Select the next expandable code block currently visible in that pane |
 | PgUp / PgDn | Scroll the focused pane by a page |
 | Alt+↑ / Alt+↓ | Scroll the focused pane by one line |
 | Home / End | Jump to the oldest messages / return to live output |
@@ -201,7 +203,21 @@ own agent's replies in cyan or magenta, with peer replies in muted gray. Speaker
 remain visible when terminal colors are disabled. A double border and arrow mark
 the pane selected for scrolling; each pane retains its own position. While you
 read history, new output does not move the view. End resumes following the latest
-output. Each pane shows its visible line range and whether it is live or in history.
+output. The pane footer shows its history position or the controls for visible code.
+
+Fenced code blocks have a language label, an indented border, and a five-source-line
+preview. Longer lines wrap to fit the pane. Ctrl+X expands the selected visible
+block, and Ctrl+K cycles between visible long blocks; Ctrl+F chooses the pane.
+The selected block has an arrow in its header. Expansion anchors the view to that
+block so new output does not pull you away; End returns to live output. Each pane
+keeps its own expanded blocks while you scroll. Folding changes only presentation,
+never the stored message or the context sent to agents.
+
+Inline backtick code is highlighted. Common fenced languages receive basic
+syntax colors for keywords, strings, numbers, and comments; unrecognized languages
+retain plain code formatting. Peer code remains muted gray, with structure and
+keyword emphasis. Backtick and tilde fences are supported, including unfinished
+blocks while a reply streams. Highlighting is lexical, not a full language parser.
 
 Commands: `/help`, `/split [codex|claude]`, `/agent [codex|claude]`, `/pause`, `/resume`, `/to <agent name>|both`,
 `/collaborate [task]`, `/chat`, `/steer queued|immediate`, `/resolve ID resolution`, `/accept validation evidence`,

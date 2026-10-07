@@ -15,6 +15,7 @@ decisions; the coordinator enforces the recorded outcome.
 - [x] Separate instance identities from providers; support Codex + Codex and Claude + Claude.
 - [x] Route with Tab/Shift+Tab using actual, distinct agent names and both.
 - [x] Color messages by speaker and provide independent, anchored pane scrolling with a live-output shortcut.
+- [x] Style inline/fenced code, preview five source lines, and expand selected visible blocks per pane.
 - [x] Direct messages schedule only their recipients; opening a pane starts no work.
 - [x] Run independent direct requests concurrently, including two instances of one provider.
 - [x] Select collaboration with Ctrl+B without submitting; Enter sends in that mode, including follow-ups.
@@ -82,7 +83,7 @@ Natural-language agreement alone never changes permissions.
 ## Initial implementation boundaries and next evaluation
 
 - Validation: `npm run check` passes TypeScript checking, production compilation,
-  and 211 offline tests, including no-reply markers, idle scheduling, incremental context, recovery checkpoints,
+  and 238 offline tests, including code formatting/folding, no-reply markers, idle scheduling, incremental context, recovery checkpoints,
   project memory, independent anchored scrolling, Unicode wrapping,
   collaboration mode selection without submission,
   default/read-only permissions, empty startup, agent picker, same-provider

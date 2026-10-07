@@ -3,12 +3,28 @@ import { Box, Text, useApp, useInput, useStdout } from 'ink';
 import type { AgentId, Decision, ProviderKind, UIController, ViewState } from '../types.js';
 import { agentName, isCollaborating, sessionAgents } from '../agents.js';
 import { tailLines, terminalText } from './text.js';
-import { historyStart, transcriptRows, type HistoryAnchor } from './transcript.js';
+import { inlineSpans } from './code-format.js';
+import { historyStart, transcriptRows, visibleCodeBlocks, type HistoryAnchor, type TranscriptRow } from './transcript.js';
 
 export interface AppProps { controller: UIController; onExit?: () => void; }
 const paneColors = ['cyan', 'magenta'] as const;
 const colorFor = (view: ViewState, agent: AgentId) => paneColors[Math.max(0, sessionAgents(view.session).findIndex(item => item.id === agent)) % paneColors.length]!;
-const help = 'PgUp/PgDn scroll · Ctrl+F pane · End latest · Ctrl+B collaboration · /help';
+const help = 'PgUp/PgDn scroll · Ctrl+F pane · Ctrl+X code · End latest · /help';
+
+function StyledRow({ row, agent, view, selected }: { row: TranscriptRow; agent: AgentId; view: ViewState; selected: boolean }) {
+  const peer = row.from !== agent && row.from !== 'user' && row.from !== 'system';
+  const color = row.from === 'user' ? 'green' : row.from === 'system' ? 'yellow' : peer ? 'gray' : colorFor(view, agent);
+  const codeLine = row.code?.part === 'line';
+  const syntaxColors = { keyword: 'magentaBright', string: 'greenBright', number: 'yellowBright', comment: 'gray', literal: 'cyanBright' } as const;
+  const text = selected && row.code?.part === 'header' ? row.text.replace(/^┌ /, '┌▸') : row.text;
+  return <Text color={codeLine ? peer ? 'gray' : 'white' : color} backgroundColor={codeLine ? 'black' : undefined} bold={row.code?.part === 'header' && selected}>
+    {(row.spans ?? [{ text }]).map((span, i) => <Text key={i}
+      bold={span.kind === 'speaker' || span.kind === 'keyword' || span.kind === 'inline'}
+      italic={span.kind === 'comment'} underline={span.kind === 'inline'}
+      backgroundColor={span.kind === 'inline' ? 'black' : undefined}
+      color={peer ? 'gray' : span.kind === 'inline' ? 'yellow' : span.kind && span.kind in syntaxColors ? syntaxColors[span.kind as keyof typeof syntaxColors] : undefined}>{span.text}</Text>)}
+  </Text>;
+}
 
 function useView(controller: UIController): ViewState {
   const [view, setView] = useState(() => controller.getView());
@@ -26,14 +42,73 @@ function AgentPane({ agent, view, width, height, tools, focused, scrolling }: {
 }) {
   const { session } = view;
   const [anchor, setAnchor] = useState<HistoryAnchor | null>(null);
-  const rows = transcriptRows(session, agent, view.streams[agent] || '', width - 4);
+  const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
+  const [selectedCode, setSelectedCode] = useState<string | null>(null);
+  const stream = view.streams[agent] || '';
+  const previous = useRef<{ stream: string; lastMessage?: string }>({ stream: '' });
+  const lastMessage = [...session.messages].reverse().find(message => message.from === agent);
+  useEffect(() => {
+    const before = previous.current;
+    if (before.stream && !stream) {
+      const source = `stream:${agent}`;
+      const streamed = terminalText(before.stream), final = terminalText(lastMessage?.text ?? '');
+      const shift = final && final.startsWith(streamed) ? 0 : final && streamed.endsWith(final) ? final.length - streamed.length
+        : streamed && final.endsWith(streamed) ? final.length - streamed.length : undefined;
+      const accepted = lastMessage && lastMessage.id !== before.lastMessage && shift !== undefined ? lastMessage.id : undefined;
+      const move = (id: string): string | null => {
+        if (!id.startsWith(source)) return id;
+        if (!accepted) return null;
+        let suffix = id.slice(source.length);
+        const offset = /^:(code|prose):(\d+)(.*)$/.exec(suffix);
+        if (offset) {
+          const position = Number(offset[2]) + shift!;
+          if (position < 0 && offset[1] !== 'prose') return null;
+          suffix = `:${offset[1]}:${Math.max(0, position)}${offset[3]}`;
+        }
+        return accepted + suffix;
+      };
+      setExpanded(current => new Set([...current].map(move).filter((id): id is string => id !== null)));
+      setSelectedCode(current => current ? move(current) : null);
+      setAnchor(current => {
+        if (!current) return null;
+        const moved = move(current.source);
+        if (!moved) return null;
+        let offset = current.offset;
+        if (current.source.startsWith(source) && shift! < 0) {
+          const prose = /^:prose:(\d+)$/.exec(current.source.slice(source.length));
+          if (prose && Number(prose[1]) < -shift!) {
+            const removed = streamed.slice(Number(prose[1]), -shift!);
+            offset = Math.max(0, offset - inlineSpans(removed).reduce((length, span) => length + span.text.length, 0));
+          }
+        }
+        return { ...current, source: moved, offset };
+      });
+    }
+    previous.current = { stream, lastMessage: lastMessage?.id };
+  }, [stream, lastMessage?.id, lastMessage?.text, agent]);
+  const rows = transcriptRows(session, agent, stream, width - 4, expanded);
   const activity = session.activities.filter(item => item.agent === agent);
   const recent = activity.at(-1);
   const toolRows = tools ? Math.min(4, Math.max(0, height - (height >= 7 ? 6 : 5))) : 0;
   const count = Math.max(1, height - (height >= 7 ? 5 : 4) - toolRows);
   const start = historyStart(rows, anchor, count);
   const end = Math.min(rows.length, start + count);
+  const blocks = visibleCodeBlocks(rows, start, end);
+  const target = blocks.find(block => block.id === selectedCode) ?? blocks[0];
   useInput((input, key) => {
+    if (key.ctrl && input === 'k') {
+      if (target) setSelectedCode(blocks[(blocks.indexOf(target) + 1) % blocks.length].id);
+      return;
+    }
+    if (key.ctrl && input === 'x') {
+      if (target) {
+        setSelectedCode(target.id);
+        setExpanded(current => { const next = new Set(current); if (next.has(target.id)) next.delete(target.id); else next.add(target.id); return next; });
+        const header = rows.findIndex(row => row.source === `${target.id}:header`);
+        setAnchor({ source: `${target.id}:header`, offset: 0, index: Math.max(0, header) });
+      }
+      return;
+    }
     const page = Math.max(1, count - 1);
     let next: number;
     if (key.end) { setAnchor(null); return; }
@@ -55,9 +130,9 @@ function AgentPane({ agent, view, width, height, tools, focused, scrolling }: {
     </Box>
     {height >= 7 && <Text dimColor wrap="truncate">{recent ? terminalText(recent.text).replace(/\n/g, ' ') : 'Ready for your message'}</Text>}
     <Box height={count} flexDirection="column" overflow="hidden">
-      <Text wrap="truncate">{rows.slice(start, end).map((row, index) => <Text key={`${row.source}:${row.offset}`} color={row.from === 'user' ? 'green' : row.from === 'system' ? 'yellow' : row.from === agent ? colorFor(view, agent) : 'gray'}>{index ? '\n' : ''}{row.prefix ? <><Text bold>{row.text.slice(0, row.prefix.length)}</Text>{row.text.slice(row.prefix.length)}</> : row.text}</Text>)}</Text>
+      <Text wrap="truncate">{rows.slice(start, end).map((row, index) => <Text key={`${row.source}:${row.offset}`}>{index ? '\n' : ''}<StyledRow row={row} agent={agent} view={view} selected={focused && row.code?.id === target?.id}/></Text>)}</Text>
     </Box>
-    <Text dimColor wrap="truncate">{start + 1}–{end}/{rows.length} · {anchor ? 'history · End latest' : 'live · PgUp history'}</Text>
+    <Text dimColor wrap="truncate">{target && focused ? `Code ${blocks.indexOf(target) + 1}/${blocks.length} · Ctrl+X ${target.expanded ? 'collapse' : 'expand'}${blocks.length > 1 ? ' · Ctrl+K next' : ''}` : `${start + 1}–${end}/${rows.length} · ${anchor ? 'history · End latest' : 'live · PgUp history'}`}</Text>
     {tools && <Box height={toolRows} flexDirection="column" borderTop>
       <Text dimColor>{tailLines(activity.map(item => `${item.kind} › ${item.text}`).join('\n') || 'No tool activity yet.', width - 4, toolRows - 1)}</Text>
     </Box>}
@@ -174,7 +249,7 @@ export function App({ controller, onExit }: AppProps) {
     if (!text) return;
     if (text.startsWith('/')) {
       const [command, ...args] = text.split(/\s+/);
-      if (command === '/help') setNotice('PgUp/PgDn scroll; Home/End oldest/latest; Alt+↑/↓ one line; Ctrl+F scroll pane. Ctrl+B toggles collaboration; Enter submits. /collaborate [TASK] /chat /split [codex|claude] /agent [codex|claude] /pause /resume /to <agent name>|both /steer queued|immediate /resolve ID resolution /accept evidence /detach /quit');
+      if (command === '/help') setNotice('PgUp/PgDn scroll; Home/End oldest/latest; Alt+↑/↓ one line; Ctrl+F scroll pane. Ctrl+X expands/collapses visible code; Ctrl+K selects the next visible code block. Ctrl+B toggles collaboration; Enter submits. /collaborate [TASK] /chat /split [codex|claude] /agent [codex|claude] /pause /resume /to <agent name>|both /steer queued|immediate /resolve ID resolution /accept evidence /detach /quit');
       else if (command === '/collaborate') {
         if (args.length ? !collaborate(args.join(' ')) : !selectCollaboration(true)) return;
       }

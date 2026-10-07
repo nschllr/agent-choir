@@ -58,6 +58,74 @@ describe('terminal text handling', () => {
 });
 
 describe('terminal collaboration workspace', () => {
+  it('previews five code lines and expands independently in the focused pane without changing the draft or recipient', async () => {
+    const controller = controllerFixture();
+    controller.getView().session.messages = ['claude', 'codex'].map(agent => ({ id: `code-${agent}`, from: agent, to: agent, at: '',
+      text: '```js\n' + Array.from({ length: 7 }, (_, i) => `${agent}_LINE_${i + 1}`).join('\n') + '\n```' }));
+    const screen = render(<App controller={controller}/>); await settle();
+    expect(screen.lastFrame()).toContain('claude_LINE_5'); expect(screen.lastFrame()).toContain('+2 lines');
+    expect(screen.lastFrame()).not.toContain('claude_LINE_6'); expect(screen.lastFrame()).not.toContain('codex_LINE_6');
+    screen.stdin.write('Draft preserved'); await settle();
+    screen.stdin.write('\x18'); await settle(); // Ctrl+X expands code in the focused first pane.
+    expect(screen.lastFrame()).toContain('claude_LINE_7'); expect(screen.lastFrame()).not.toContain('codex_LINE_6');
+    screen.stdin.write('\x06'); await settle(); // Ctrl+F changes pane focus only.
+    screen.stdin.write('\x18'); await settle();
+    expect(screen.lastFrame()).toContain('codex_LINE_7'); expect(screen.lastFrame()).toContain('claude_LINE_7');
+    screen.stdin.write('\x18'); await settle();
+    expect(screen.lastFrame()).not.toContain('codex_LINE_6'); expect(screen.lastFrame()).toContain('claude_LINE_7');
+    expect(screen.lastFrame()).toContain('Draft preserved');
+    expect(controller.setRecipient).not.toHaveBeenCalled(); expect(controller.send).not.toHaveBeenCalled();
+    screen.stdin.write('\r'); await settle();
+    expect(controller.send).toHaveBeenCalledWith('Draft preserved', 'both', 'queued');
+  });
+  it('cycles among visible code blocks and expands the selected block', async () => {
+    const controller = controllerFixture(true);
+    const block = (label: string) => '```text\n' + Array.from({ length: 6 }, (_, i) => `${label}_${i + 1}`).join('\n') + '\n```';
+    controller.getView().session.messages = [{ id: 'codes', from: 'codex', to: 'codex', at: '', text: block('FIRST') + '\nBetween\n' + block('SECOND') }];
+    const screen = render(<App controller={controller}/>); await settle();
+    expect(screen.lastFrame()).toContain('Code 1/2');
+    screen.stdin.write('\x0b'); await settle(); // Ctrl+K selects the next visible block.
+    expect(screen.lastFrame()).toContain('Code 2/2');
+    screen.stdin.write('\x18'); await settle();
+    expect(screen.lastFrame()).toContain('SECOND_6'); expect(screen.lastFrame()).not.toContain('FIRST_6');
+    screen.stdin.write('\x0b'); await settle();
+    screen.stdin.write('\x18'); await settle();
+    expect(screen.lastFrame()).toContain('FIRST_6'); expect(screen.lastFrame()).toContain('SECOND_6');
+    expect(controller.send).not.toHaveBeenCalled();
+  });
+  it('keeps streamed code expanded when it grows and becomes a saved reply without its commentary prefix', async () => {
+    const controller = controllerFixture(true);
+    const partial = '```ts\nconst a = 1;\nsecond\nthird\nfourth\nfifth\nSTREAM_SIXTH';
+    controller.getView().streams.codex = 'Investigating first.\n' + partial;
+    const screen = render(<App controller={controller}/>); await settle();
+    expect(screen.lastFrame()).not.toContain('STREAM_SIXTH');
+    screen.stdin.write('\x18'); await settle();
+    expect(screen.lastFrame()).toContain('STREAM_SIXTH');
+    const complete = partial + '\nSTREAM_SEVENTH\n```';
+    controller.getView().streams.codex = 'Investigating first.\n' + complete;
+    controller.setDelivery('immediate'); await settle();
+    expect(screen.lastFrame()).toContain('STREAM_SEVENTH');
+    controller.getView().streams.codex = '';
+    controller.getView().session.messages.push({ id: 'accepted', from: 'codex', to: 'codex', at: '', text: complete });
+    controller.setDelivery('queued'); await settle();
+    expect(screen.lastFrame()).toContain('STREAM_SEVENTH');
+    screen.stdin.write('\x18'); await settle();
+    expect(screen.lastFrame()).not.toContain('STREAM_SIXTH');
+  });
+  it('keeps a scrolled prose row when commentary is removed from the accepted reply', async () => {
+    const controller = controllerFixture(true);
+    const complete = Array.from({ length: 80 }, (_, i) => `Retained intro ${i}`).join('\n') + '\n```ts\nconst value = 1;\n```';
+    controller.getView().streams.codex = 'Temporary commentary.\n' + complete;
+    const screen = render(<App controller={controller}/>); await settle();
+    screen.stdin.write('\x1b[5~'); await settle();
+    const visible = screen.lastFrame()!.match(/Retained intro \d+/g);
+    expect(visible?.length).toBeGreaterThan(0);
+    controller.getView().streams.codex = '';
+    controller.getView().session.messages.push({ id: 'accepted', from: 'codex', to: 'codex', at: '', text: complete });
+    controller.setDelivery('queued'); await settle();
+    expect(screen.lastFrame()!.match(/Retained intro \d+/g)).toEqual(visible);
+    expect(screen.lastFrame()).toContain('history · End latest');
+  });
   it('scrolls each pane independently, clamps at the oldest message, and preserves input and routing', async () => {
     const controller = controllerFixture();
     controller.getView().session.messages = ['claude', 'codex'].flatMap(agent => Array.from({ length: 30 }, (_, i) => ({ id: `${agent}-${i}`, at: '', from: agent, to: agent, text: `${agent} message ${String(i).padStart(2, '0')}` })));

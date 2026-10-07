@@ -71,7 +71,11 @@ after completion, and explicit exit. UI tests cover draft preservation, persiste
 selection across follow-ups, cancellation before a direct submission, independent
 pane scrolling, and stable history during streaming. Transcript tests cover wide
 characters, emoji, resize anchors, and access to messages beyond the previous
-80,000-character display limit. Controller
+80,000-character display limit. Code-format tests cover inline backticks, lexical
+boundaries, opaque strings/comments, and source preservation. Folding checks cover
+five source lines, wrapped/blank lines, long/tilde fences, incomplete streaming
+blocks, visible block selection, per-pane expansion, unchanged composer/routing,
+and transferring expansion when streamed output becomes a saved reply. Controller
 tests also cover concurrent replies to both (including two Codex instances),
 delivery to an idle peer during an active turn, independent completion and follow-up,
 turn reservations, persisted recipient queues, steering,
