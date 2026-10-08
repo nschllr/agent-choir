@@ -11,6 +11,7 @@ import { containsMouse, type MouseEvents, type MouseEvent, type PaneHandle } fro
 import { CopyView, copySnapshot, type CopySnapshot } from './CopyView.js';
 import { ModelPicker } from './ModelPicker.js';
 import { PermissionPicker } from './PermissionPicker.js';
+import { WorkingIndicator } from './WorkingIndicator.js';
 import { permissionLabels, permissionModes, sessionPermissions } from '../permissions.js';
 import type { ModelSettings } from '../types.js';
 
@@ -45,8 +46,8 @@ function useView(controller: UIController): ViewState {
   return view;
 }
 
-const AgentPane = React.memo(function AgentPane({ agent, view, width, height, tools, focused, scrolling, panes }: {
-  agent: AgentId; view: ViewState; width: number; height: number; tools: boolean; focused: boolean; scrolling: boolean;
+const AgentPane = React.memo(function AgentPane({ agent, view, width, height, tools, focused, scrolling, visible, panes }: {
+  agent: AgentId; view: ViewState; width: number; height: number; tools: boolean; focused: boolean; scrolling: boolean; visible: boolean;
   panes: Map<AgentId, PaneHandle>;
 }) {
   const node = useRef<DOMElement>(null);
@@ -99,6 +100,7 @@ const AgentPane = React.memo(function AgentPane({ agent, view, width, height, to
   const rows = transcriptRows(session, agent, stream, width - 4, expanded);
   const activity = session.activities.filter(item => item.agent === agent);
   const recent = activity.at(-1);
+  const working = view.busy[agent];
   const toolRows = tools ? Math.min(4, Math.max(0, height - (height >= 8 ? 7 : height >= 7 ? 6 : 5))) : 0;
   const count = Math.max(1, height - (height >= 8 ? 6 : height >= 7 ? 5 : 4) - toolRows);
   const start = historyStart(rows, anchor, count);
@@ -149,14 +151,15 @@ const AgentPane = React.memo(function AgentPane({ agent, view, width, height, to
   return <Box ref={node} flexDirection="column" width={width} height={height} flexShrink={0} borderStyle={focused ? 'double' : 'round'} borderColor={colorFor(view, agent)} paddingX={1}>
     <Box justifyContent="space-between">
       <Text bold color={colorFor(view, agent)}>{focused ? '▸ ' : ''}{agentName(session, agent)}</Text>
-      <Text dimColor>{view.busy[agent] ? 'working' : session.awaitingInput ? 'ready' : session.finished[agent] ? 'finished' : 'ready'}</Text>
+      {!working && <Text dimColor>{session.awaitingInput ? 'ready' : session.finished[agent] ? 'finished' : 'ready'}</Text>}
     </Box>
     {height >= 8 && <Text dimColor wrap="truncate">{session.models?.[agent] ?? 'Native model'} · {session.efforts?.[agent] ?? 'default effort'}{view.busy[agent] ? ' · next turn settings' : ''}</Text>}
-    {height >= 7 && <Text dimColor wrap="truncate">{recent ? terminalText(recent.text).replace(/\n/g, ' ') : 'Ready for your message'}</Text>}
     <Box height={count} flexDirection="column" overflow="hidden">
       <Text wrap="truncate">{rows.slice(start, end).map((row, index) => <Text key={`${row.source}:${row.offset}`}>{index ? '\n' : ''}<StyledRow row={row} agent={agent} view={view} selected={focused && row.code?.id === target?.id}/></Text>)}</Text>
     </Box>
-    <Text dimColor wrap="truncate">{target && focused ? `Code ${blocks.indexOf(target) + 1}/${blocks.length} · Ctrl+X ${target.expanded ? 'collapse' : 'expand'}${blocks.length > 1 ? ' · Ctrl+K next' : ''}` : `${start + 1}–${end}/${rows.length} · ${anchor ? 'history · End latest' : 'live · PgUp history'}`}</Text>
+    {working ? <WorkingIndicator color={colorFor(view, agent)} activity={height >= 7 ? recent?.text : undefined} animate={visible}/>
+      : height >= 7 && <Text dimColor wrap="truncate">{recent ? terminalText(recent.text).replace(/\n/g, ' ') : 'Ready for your message'}</Text>}
+    {(height >= 7 || !working) && <Text dimColor wrap="truncate">{target && focused ? `Code ${blocks.indexOf(target) + 1}/${blocks.length} · Ctrl+X ${target.expanded ? 'collapse' : 'expand'}${blocks.length > 1 ? ' · Ctrl+K next' : ''}` : `${start + 1}–${end}/${rows.length} · ${anchor ? 'history · End latest' : 'live · PgUp history'}`}</Text>}
     {tools && <Box height={toolRows} flexDirection="column" borderTop>
       <Text dimColor>{tailLines(activity.map(item => `${item.kind} › ${item.text}`).join('\n') || 'No tool activity yet.', width - 4, toolRows - 1)}</Text>
     </Box>}
@@ -469,7 +472,7 @@ export function App({ controller, onExit, mouse }: AppProps) {
     <Box justifyContent="space-between" flexShrink={0}><Text bold wrap="truncate">AGENT DUET <Text dimColor>· {isCollaborating(view.session) ? 'collaborating' : 'chat'} · {permissionLabels[permissions.mode].toLowerCase()}</Text>{view.session.demo && <Text color="yellow"> · OFFLINE DEMO</Text>}</Text><Text color={view.session.status === 'running' ? 'green' : 'yellow'}>{closing === 'close' ? 'pausing and closing' : closing === 'detach' ? 'detaching · work continues' : view.session.awaitingInput ? 'ready' : view.session.status.replace('_', ' ')}</Text></Box>
     <Text dimColor wrap="truncate">{terminalText(view.session.project)} · {terminalText(view.session.id)} · turns {usage.turns}/{view.session.maxTurns} · {minutes}/{view.session.maxMinutes} min</Text>
     <Box flexDirection={narrow ? 'column' : 'row'} flexShrink={0}>
-      {roster.map((agent, index) => <AgentPane key={agent.id} agent={agent.id} view={view} width={narrow || paneCount === 1 ? width : index === paneCount - 1 ? width - paneWidth : paneWidth} height={paneHeight} tools={tools} focused={focusedAgent === agent.id} scrolling={!picker && !closing && !copy && !modelAgent && !permissionsOpen} panes={panes.current}/>)}
+      {roster.map((agent, index) => <AgentPane key={agent.id} agent={agent.id} view={view} width={narrow || paneCount === 1 ? width : index === paneCount - 1 ? width - paneWidth : paneWidth} height={paneHeight} tools={tools} focused={focusedAgent === agent.id} scrolling={!picker && !closing && !copy && !modelAgent && !permissionsOpen} visible={!copy && !modelAgent && !permissionsOpen} panes={panes.current}/>)}
       {picker?.mode === 'add' && <AgentPicker provider={picker.provider} width={narrow ? width : width - paneWidth} height={paneHeight} choosing={choosing}/>}
 
     </Box>

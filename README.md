@@ -280,6 +280,10 @@ is available, the CLI announces headless mode and exits at completion instead.
 Some terminals reserve Ctrl+S for flow control; `/steer immediate` and
 `/steer queued` provide the same setting without that shortcut.
 
+While an agent works, its pane shows a spinner in the agent's color below the
+conversation, with elapsed time and the latest activity. Each pane updates
+independently. Animation stops in copy mode and while a settings view is open.
+
 Long drafts wrap automatically. The composer grows to four display lines, then
 scrolls to keep the cursor visible. Soft wrapping does not insert newlines into
 the message; Alt+Enter or Ctrl+J inserts an actual newline. Left/Right and

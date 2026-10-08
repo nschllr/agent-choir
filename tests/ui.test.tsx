@@ -63,6 +63,46 @@ describe('terminal text handling', () => {
 });
 
 describe('terminal collaboration workspace', () => {
+  it('animates work below the active peer transcript while preserving input and a frozen copy view', async () => {
+    const controller = controllerFixture();
+    controller.getView().busy.codex = true;
+    controller.getView().session.activities = [{ id: 'tool', at: '', agent: 'codex', kind: 'tool', text: 'Checking project files' }];
+    const screen = render(<App controller={controller}/>); await settle();
+    Object.defineProperty(screen.stdout, 'columns', { value: 120 });
+    Object.defineProperty(screen.stdout, 'rows', { value: 38 });
+    screen.stdout.emit('resize'); await settle();
+    const first = screen.lastFrame()!;
+    expect(first.match(/Working…/g)).toHaveLength(1);
+    expect(first.indexOf('Working…')).toBeGreaterThan(first.indexOf('Let us compare durability.'));
+    expect(first).toContain('Checking project files');
+    expect(first).toMatch(/Working… · \d+s/);
+    const spinner = (frame: string) => frame.match(/(\S) Working…/)?.[1];
+    await vi.waitFor(() => expect(spinner(screen.lastFrame()!)).not.toBe(spinner(first)), { interval: 30 });
+    screen.stdin.write('Draft survives animation'); await settle();
+    expect(screen.lastFrame()).toContain('Draft survives animation');
+    screen.stdin.write('\x19'); await settle();
+    const copy = screen.lastFrame();
+    expect(copy).toContain('COPY MODE');
+    await new Promise(resolve => setTimeout(resolve, 300));
+    expect(screen.lastFrame()).toBe(copy);
+    screen.stdin.write('\x1b'); await settle();
+    expect(screen.lastFrame()).toContain('Working…');
+    expect(screen.lastFrame()).toContain('Draft survives animation');
+    controller.getView().busy.codex = false;
+    controller.setRecipient('codex'); await settle();
+    expect(screen.lastFrame()).not.toContain('Working…');
+    expect(controller.send).not.toHaveBeenCalled();
+  });
+  it('keeps a working indicator visible in compact stacked panes', async () => {
+    const controller = controllerFixture();
+    controller.getView().busy = { codex: true, claude: true };
+    const screen = render(<App controller={controller}/>); await settle();
+    Object.defineProperty(screen.stdout, 'columns', { value: 60 });
+    Object.defineProperty(screen.stdout, 'rows', { value: 24 });
+    screen.stdout.emit('resize'); await settle();
+    expect(screen.lastFrame()!.match(/Working…/g)).toHaveLength(2);
+    expect(screen.lastFrame()).toContain('direct chat');
+  });
   it('shows and edits limits without sending commands to agents, and displays usage since the last message', async () => {
     const controller = controllerFixture();
     controller.getView().session.allowanceStart = { turns: 1, elapsedMs: 0 };
