@@ -3,9 +3,10 @@ import { realpath, stat } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { homedir } from 'node:os';
 import { sessionPermissions, validPermissions } from './permissions.js';
+import { integrationPrompt } from './integration.js';
 import { nativeSessionTitle } from './session-label.js';
 import { claudeEfforts, codexEfforts, fallbackCatalog, validModelSettings } from './model-settings.js';
-import type { ModelCatalog, ModelSettings, PermissionSettings } from './types.js';
+import type { ModelCatalog, ModelSettings, PermissionSettings, IntegrationCandidate, WorkspaceAccess } from './types.js';
 import { applyReply, canImplement, resolveDecision } from './engine.js';
 import { buildContextDelivery, contextHash, contextMessages, hasPendingContext, messageHash } from './context-delivery.js';
 import type { ContextMemory } from './context-memory.js';
@@ -21,6 +22,9 @@ interface Persistence { save(session: Session): void; }
 interface Workspaces extends WorkspaceManager {
   finalize?(session: Session, agent: AgentId): Promise<string | null>;
   merge?(session: Session): Promise<{ path: string; conflicts: boolean }>;
+  prepareIntegration?(session: Session, agent: AgentId): Promise<WorkspaceAccess>;
+  finishIntegration?(session: Session): Promise<IntegrationCandidate>;
+  verifyIntegration?(session: Session, revision: string): Promise<boolean>;
 }
 export class DuetController implements UIController {
   private catalogs = new Map<AgentId, Promise<ModelCatalog>>();
@@ -54,6 +58,7 @@ export class DuetController implements UIController {
     this.save();
   }
   private ids(): AgentId[] { return agentIds(this.state.session); }
+  private automaticIntegration(): boolean { return !this.state.session.demo && this.ids().length === 2 && Boolean(this.workspaces.prepareIntegration && this.workspaces.finishIntegration && this.workspaces.verifyIntegration); }
   async getModelOptions(agent: AgentId): Promise<ModelCatalog> {
     const config = sessionAgents(this.state.session).find(item => item.id === agent);
     if (this.closed || !config) throw new Error('Unknown or closed agent');
@@ -177,7 +182,8 @@ export class DuetController implements UIController {
     if (this.closed) throw new Error('Session is closed');
     if (this.running || this.rosterChanging || this.state.session.status === 'complete' || !this.state.session.brief.trim()) return;
     this.state.session.awaitingInput = false;
-    if (this.state.session.integration && this.state.session.integration.status !== 'accepted') {
+    if (this.state.session.integration?.status === 'waiting_user') throw new Error('Resolve integration with /resolve integration <your decision> before resuming');
+    if (this.state.session.integration && this.state.session.integration.status !== 'accepted' && !this.automaticIntegration()) {
       if (['pending', 'conflicts'].includes(this.state.session.integration.status)) {
         this.running = this.integrate().catch(error => {
           this.state.session.status = 'error'; this.state.session.error = error instanceof Error ? error.message : String(error); this.save();
@@ -188,7 +194,7 @@ export class DuetController implements UIController {
     }
     if (this.state.session.decisions.some(d => d.status === 'waiting_user')) throw new Error('Resolve the pending decision first with /resolve');
     const s = this.state.session;
-    if (!isCollaborating(s) && !s.pendingRecipients?.length) { s.awaitingInput = true; this.save(); return; }
+    if (!isCollaborating(s) && !s.pendingRecipients?.length && (!s.integration || s.integration.status === 'accepted')) { s.awaitingInput = true; this.save(); return; }
     // An explicit resume renews an exhausted allowance; never renew automatically.
     if (s.turns >= s.maxTurns) s.maxTurns += 30;
     if (s.elapsedMs >= s.maxMinutes * 60_000) s.maxMinutes += 30;
@@ -218,6 +224,18 @@ export class DuetController implements UIController {
   setDelivery(mode: Delivery): void { this.state.delivery = mode; this.notify(); }
   async send(text: string, to = this.state.recipient, delivery = this.state.delivery): Promise<void> {
     if (!text.trim()) return;
+    if (this.closed || this.rosterChanging) throw new Error('Session cannot receive messages now');
+    if (this.state.session.integration && this.state.session.integration.status !== 'accepted' && this.automaticIntegration()) {
+      const resume = this.state.session.status === 'running';
+      await this.pause();
+      const s = this.state.session, i = s.integration!;
+      s.messages.push({ id: randomUUID(), at: new Date().toISOString(), from: 'user', to: 'both', text: text.trim() });
+      this.inputRevision++;
+      if (i.owner && i.status !== 'waiting_user') { i.status = 'resolving'; delete i.revision; }
+      this.save();
+      if (resume) await this.start();
+      return;
+    }
     const autoStart = this.state.session.awaitingInput === true || this.state.session.status === 'complete';
     this.validateRecipient(to);
     if (this.closed || this.rosterChanging) throw new Error('Session cannot receive messages now');
@@ -247,6 +265,7 @@ export class DuetController implements UIController {
   }
   async collaborate(text: string): Promise<void> {
     if (!text.trim()) throw new Error('Include a task for collaboration');
+    if (this.state.session.integration && this.state.session.integration.status !== 'accepted' && this.automaticIntegration()) return this.send(text, 'both');
     if (this.ids().length !== 2) throw new Error('Add a second agent before starting collaboration');
     if (this.closed || this.rosterChanging) throw new Error('Session cannot receive messages now');
     await this.pause();
@@ -262,6 +281,15 @@ export class DuetController implements UIController {
   }
 
   async resolve(id: string, resolution: string): Promise<void> {
+    if (id === 'integration' && this.state.session.integration?.status === 'waiting_user') {
+      if (!resolution.trim()) throw new Error('Include your integration decision');
+      await this.pause();
+      const i = this.state.session.integration!;
+      i.status = 'resolving'; i.userResolution = resolution.trim(); i.rounds = 0; delete i.revision;
+      this.state.session.status = 'paused';
+      this.note(`User resolved integration: ${resolution.trim()}. Resume to implement and review that decision.`);
+      return;
+    }
     await this.pause(); this.state.session = resolveDecision(this.state.session, id, resolution); this.save();
     await this.memory?.prepare(this.state.session);
   }
@@ -307,9 +335,10 @@ export class DuetController implements UIController {
   private async loop(): Promise<void> {
     while (this.state.session.status === 'running') {
       const s = this.state.session;
+      if (s.integration && s.integration.status !== 'accepted' && this.automaticIntegration()) { await this.integrationLoop(); return; }
       if (!isCollaborating(s)) {
         await this.directLoop();
-        if (this.state.session.integration?.status === 'pending') await this.integrate();
+        if (this.state.session.integration?.status === 'pending' && (!this.automaticIntegration() || this.state.session.status === 'running')) await this.integrate();
         return;
       }
       if (s.turns >= s.maxTurns) { this.stop('Turn limit reached. Resume explicitly to add 30 turns.'); break; }
@@ -322,7 +351,7 @@ export class DuetController implements UIController {
       }
       const results = await Promise.all(selected.map(agent => this.runAgent(agent)));
       for (let i = 0; i < results.length; i++) await this.acceptReply(selected[i], results[i]);
-      if (this.state.session.integration?.status === 'pending') await this.integrate();
+      if (this.state.session.integration?.status === 'pending' && (!this.automaticIntegration() || this.state.session.status === 'running')) await this.integrate();
     }
   }
   /** Direct recipients run independently; state transitions are applied one at a time. */
@@ -383,7 +412,7 @@ export class DuetController implements UIController {
       } else if (this.state.session.yieldedInputs) delete this.state.session.yieldedInputs[agent];
       const plan = this.state.session.decisions.find(decision => decision.kind === 'plan');
       if (!chat && this.state.session.status === 'complete' && this.state.session.scope === 'build' && plan?.tasks.length && !this.state.session.demo) {
-        this.state.session.integration = { status: 'pending' }; this.state.session.status = 'paused';
+        this.state.session.integration = { status: 'pending' }; this.state.session.status = this.automaticIntegration() ? 'running' : 'paused';
       }
       this.state.streams[agent] = ''; this.next = this.successor(agent);
       if (chat) {
@@ -413,12 +442,75 @@ export class DuetController implements UIController {
     const tasks = this.state.session.decisions.find(d => d.kind === 'plan')?.tasks ?? [];
     const integrated = tasks.length ? await this.workspaces.merge?.(this.state.session) : { path: this.state.session.project, conflicts: false };
     if (!integrated) throw new Error('Build integration is unavailable');
+    if (this.automaticIntegration()) {
+      const previous = this.state.session.integration;
+      this.state.session.integration = { ...previous, path: integrated.path, status: 'resolving', owner: previous?.owner ?? this.ids()[0], reviewer: previous?.reviewer ?? this.ids()[1], rounds: previous?.rounds ?? 0 };
+      this.note(`Integration workspace: ${integrated.path}. ${this.state.session.integration.owner} will resolve conflicts and validate; ${this.state.session.integration.reviewer} will review the candidate. Original branch unchanged.`);
+      return;
+    }
     this.state.session.integration = { path: integrated.path, status: integrated.conflicts ? 'conflicts' : 'review' };
     this.state.session.status = 'paused';
     this.note(integrated.conflicts ? `Integration conflict. Work preserved at ${integrated.path}; original branch unchanged. Resolve the candidate manually before accepting it.` : `Integration checkpoint: ${integrated.path}. Inspect the combined diff, run validation, then /accept <validation evidence>. Original branch unchanged.`);
     await this.memory?.prepare(this.state.session);
   }
-  private async runAgent(agent: AgentId): Promise<TurnResult | undefined> {
+  private async integrationLoop(): Promise<void> {
+    if (!this.state.session.integration?.owner) await this.integrate();
+    while (this.state.session.status === 'running') {
+      const s = this.state.session, i = s.integration!;
+      if (i.status === 'accepted' || i.status === 'waiting_user') return;
+      if (s.turns >= s.maxTurns) { this.stop('Integration turn limit reached. Resume explicitly to continue.'); return; }
+      if (i.status === 'resolving' && s.scope !== 'build') { this.stop('Integration requires project edits. Change /permissions, then /resume.'); return; }
+      const agent = i.status === 'resolving' ? i.owner! : i.reviewer!;
+      const expected = JSON.stringify(i);
+      const result = await this.runAgent(agent, true);
+      if (!result || result.ticket !== this.tickets[agent] || this.state.session.status !== 'running' || JSON.stringify(this.state.session.integration) !== expected) continue;
+      this.state.session.turns++;
+      this.acknowledgeContext(agent, result.context);
+      try {
+        const report = result.reply.actions[0];
+        if (result.reply.actions.length !== 1 || report?.type !== 'integration_report') throw new Error('Return exactly one integration_report with evidence');
+        const allowed = i.status === 'resolving' ? ['ready', 'consult', 'blocked'] : i.status === 'consulting' ? ['advice', 'blocked'] : ['accept', 'changes_requested', 'blocked'];
+        if (!allowed.includes(report.outcome)) throw new Error('That integration outcome is not valid for your current role');
+        if (i.status === 'peer_review' && report.revision !== i.revision) throw new Error('Review must name the exact candidate revision');
+        if (report.outcome === 'ready') {
+          const candidate = await this.workspaces.finishIntegration!(this.state.session);
+          if (result.ticket !== this.tickets[agent] || this.state.session.status !== 'running') continue;
+          i.path = candidate.path;
+          if (candidate.conflicts || candidate.needsValidation) { i.notes = candidate.conflicts ? 'Further merge conflicts remain. Resolve them and rerun combined validation.' : 'Further finalized commits were merged after your checks. Rerun validation on the combined candidate.'; delete i.revision; }
+          else {
+            if (!candidate.revision || !await this.workspaces.verifyIntegration!(this.state.session, candidate.revision)) throw new Error('Candidate is not clean or does not contain all completed task commits');
+            if (result.ticket !== this.tickets[agent] || this.state.session.status !== 'running') continue;
+            i.status = 'peer_review'; i.revision = candidate.revision; i.validation = report.summary; i.notes = report.summary;
+          }
+        } else if (report.outcome === 'accept') {
+          const unchanged = await this.workspaces.verifyIntegration!(this.state.session, i.revision!);
+          if (result.ticket !== this.tickets[agent] || this.state.session.status !== 'running') continue;
+          if (!unchanged) {
+            i.status = 'resolving'; delete i.revision; i.notes = 'Candidate changed during review. Revalidate the current tree and request a fresh review.';
+          } else {
+            if (result.ticket !== this.tickets[agent] || this.state.session.status !== 'running') continue;
+            i.status = 'accepted'; i.notes = report.summary;
+            this.state.session.status = !isCollaborating(this.state.session) && this.state.session.pendingRecipients?.length ? 'paused' : 'complete';
+          }
+        } else if (report.outcome === 'blocked') {
+          i.status = 'waiting_user'; i.notes = report.summary; this.state.session.status = 'waiting_user';
+        } else if (report.outcome === 'advice') { i.status = 'resolving'; i.notes = report.summary; }
+        else {
+          i.rounds = (i.rounds ?? 0) + (report.outcome === 'changes_requested' ? 1 : 0); i.notes = report.summary; delete i.revision;
+          i.status = i.rounds >= 3 ? 'waiting_user' : report.outcome === 'consult' ? 'consulting' : 'resolving';
+          if (i.status === 'waiting_user') this.state.session.status = 'waiting_user';
+        }
+        const message = { id: randomUUID(), at: new Date().toISOString(), from: agent, to: 'both', text: result.reply.message.trim() || report.summary };
+        this.state.session.messages.push(message);
+        this.state.session.contextCursors![agent]!.messages[message.id] = messageHash(message);
+        this.state.streams[agent] = ''; this.save();
+      } catch (error) {
+        if (result.ticket !== this.tickets[agent] || this.state.session.status !== 'running') continue;
+        this.note(`Integration response needs correction: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
+  }
+  private async runAgent(agent: AgentId, integrating = false): Promise<TurnResult | undefined> {
     const inputRevision = isCollaborating(this.state.session) ? this.inputRevision : this.recipientRevisions[agent] ?? 0;
     const ticket = ++this.tickets[agent], abort = new AbortController(); this.aborts.set(agent, abort); this.queued.delete(agent);
     this.state.busy[agent] = true; this.state.streams[agent] = ''; this.notify();
@@ -426,16 +518,16 @@ export class DuetController implements UIController {
       const memory = await this.memory?.prepare(this.state.session);
       if (abort.signal.aborted) return;
       const snapshot = structuredClone(this.state.session);
-      const workspace = snapshot.demo ? { cwd: snapshot.project, writable: false } : await this.workspaces.prepare(snapshot, agent);
+      const workspace = snapshot.demo ? { cwd: snapshot.project, writable: false } : integrating ? await this.workspaces.prepareIntegration!(snapshot, agent) : await this.workspaces.prepare(snapshot, agent);
       if (abort.signal.aborted) return;
       const initial = !snapshot.messages.some(m => m.from === agent);
-      const task = workspace.writable && isCollaborating(snapshot) ? snapshot.decisions.find(d => d.kind === 'plan')?.tasks.find(t => t.owner === agent && !Object.hasOwn(snapshot.completedTasks, t.id) && t.dependsOn.every(id => Object.hasOwn(snapshot.completedTasks, id))) : undefined;
+      const task = !integrating && workspace.writable && isCollaborating(snapshot) ? snapshot.decisions.find(d => d.kind === 'plan')?.tasks.find(t => t.owner === agent && !Object.hasOwn(snapshot.completedTasks, t.id) && t.dependsOn.every(id => Object.hasOwn(snapshot.completedTasks, id))) : undefined;
       const joining = initial && this.ids().length > 1 && snapshot.messages.some(message => this.ids().includes(message.from));
       const delivery = buildContextDelivery(snapshot, agent, memory);
       this.state.session.contextCursors ??= {};
       this.state.session.contextCursors[agent] = delivery.cursor;
       this.save();
-      const prompt = delivery.prompt + (isCollaborating(snapshot) && initial && this.ids().length > 1 ? joining ? '\nJOINING EXISTING CONVERSATION: review the shared history and contribute your perspective. Do not propose or vote on decisions in this first turn. Yield if no peer response is needed, or finish if the exchange is complete.' : '\nINITIAL INDEPENDENT EXPLORATION: give your own initial thoughts. Do not propose or vote on decisions in this first turn. Yield if no peer response is needed, or finish if the exchange is complete; otherwise you will see your peer’s thoughts next.' : '') + (task && !isCollaborating(snapshot) ? `\nOnly if the user requests implementation, your authorized task is: ${JSON.stringify(task)}. Do not resume pending work merely because a task exists. Do not start sibling tasks.` : task ? `\nYour only active implementation task this turn: ${JSON.stringify(task)}. Do not start sibling tasks. Verify this task, then return complete_task for this id. Do not revise the accepted plan while implementing.` : '');
+      const prompt = delivery.prompt + (integrating ? integrationPrompt(snapshot) : (isCollaborating(snapshot) && initial && this.ids().length > 1 ? joining ? '\nJOINING EXISTING CONVERSATION: review the shared history and contribute your perspective. Do not propose or vote on decisions in this first turn. Yield if no peer response is needed, or finish if the exchange is complete.' : '\nINITIAL INDEPENDENT EXPLORATION: give your own initial thoughts. Do not propose or vote on decisions in this first turn. Yield if no peer response is needed, or finish if the exchange is complete; otherwise you will see your peer’s thoughts next.' : '') + (task && !isCollaborating(snapshot) ? `\nOnly if the user requests implementation, your authorized task is: ${JSON.stringify(task)}. Do not resume pending work merely because a task exists. Do not start sibling tasks.` : task ? `\nYour only active implementation task this turn: ${JSON.stringify(task)}. Do not start sibling tasks. Verify this task, then return complete_task for this id. Do not revise the accepted plan while implementing.` : ''));
       const reply = await this.providers[agent].run({ agent, prompt, ...workspace, permissions: sessionPermissions(snapshot), sessionId: snapshot.providerSessions[agent], model: snapshot.models?.[agent], effort: snapshot.efforts?.[agent], title: nativeSessionTitle(snapshot, agent), signal: abort.signal }, event => {
         if (ticket !== this.tickets[agent] || abort.signal.aborted) return;
         if (event.type === 'text') { this.state.streams[agent] = (this.state.streams[agent] + event.text).slice(-40_000); this.notify(); }

@@ -15,6 +15,7 @@ export const REPLY_SCHEMA = {
     action({ type: { type: 'string', enum: ['complete_task'] }, id: str, summary: str }),
     action({ type: { type: 'string', enum: ['finish'] }, summary: str }),
     action({ type: { type: 'string', enum: ['yield'] } }),
+    action({ type: { type: 'string', enum: ['integration_report'] }, outcome: { type: 'string', enum: ['ready', 'accept', 'changes_requested', 'consult', 'advice', 'blocked'] }, revision: str, summary: str }),
   ] } } }, required: ['message', 'actions'],
 } as const;
 
@@ -43,6 +44,13 @@ function parseAction(value: unknown): CollaborationAction {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('Invalid action');
   const type = (value as Record<string, unknown>).type;
   if (type === 'yield') { object(value, ['type']); return { type }; }
+  if (type === 'integration_report') {
+    const v = object(value, ['type', 'outcome', 'revision', 'summary']);
+    if (!['ready', 'accept', 'changes_requested', 'consult', 'advice', 'blocked'].includes(v.outcome as string)) throw new Error('Invalid integration outcome');
+    const revision = string(v.revision, 'revision', true);
+    if (revision && !/^[0-9a-f]{40,64}$/.test(revision)) throw new Error('Invalid integration revision');
+    return { type, outcome: v.outcome as import('./types.js').IntegrationOutcome, revision, summary: string(v.summary, 'integration evidence') };
+  }
   if (type === 'propose') {
     const v = object(value, ['type', 'id', 'kind', 'title', 'proposal', 'tasks']);
     if (v.kind !== 'plan' && v.kind !== 'decision') throw new Error('Invalid decision kind');

@@ -190,9 +190,9 @@ function AgentPicker({ provider, width, height, choosing }: { provider: Provider
 function IntegrationCard({ integration }: { integration: NonNullable<ViewState['session']['integration']> }) {
   const accepted = integration.status === 'accepted';
   return <Box flexDirection="column" borderStyle="single" borderColor={accepted ? 'green' : 'yellow'} paddingX={1}>
-    <Text bold color={accepted ? 'green' : 'yellow'}>Integration checkpoint · {integration.status}</Text>
+    <Text bold color={accepted ? 'green' : 'yellow'}>Integration · {integration.status.replace('_', ' ')}</Text>
     <Text dimColor wrap="truncate">{integration.path ? terminalText(integration.path) : 'Preparing the combined candidate'}</Text>
-    <Text wrap="truncate">{integration.status === 'review' ? 'Inspect and test the candidate, then /accept <validation evidence>' : integration.status === 'conflicts' ? 'Resolve integration conflicts before acceptance.' : accepted ? terminalText(integration.notes || 'Combined candidate accepted.') : 'Completion awaits combined validation.'}</Text>
+    <Text wrap="truncate">{integration.status === 'waiting_user' ? 'Your decision: /resolve integration <decision>, then /resume' : integration.status === 'review' ? 'Resume for agent integration, or /accept <your validation evidence>' : integration.status === 'conflicts' ? '/resume lets the integration agent resolve conflicts.' : accepted ? terminalText(integration.notes || 'Combined candidate accepted.') : integration.status === 'resolving' ? 'Integration owner is resolving conflicts and validating the combined code.' : integration.status === 'peer_review' ? 'Peer reviews the candidate revision and validation evidence (read-only).' : integration.status === 'consulting' ? 'Peer is answering the integration owner’s question (read-only).' : 'Preparing the combined candidate.'}</Text>
   </Box>;
 }
 

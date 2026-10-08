@@ -22,6 +22,14 @@ afterEach(() => {
 });
 
 describe('durable session store', () => {
+  it('restores integration ownership, exact review revision and binding user decisions', () => {
+    const { store, session } = fixture();
+    session.integration = { status: 'peer_review', path: '/tmp/candidate', owner: 'claude', reviewer: 'codex', revision: 'a'.repeat(40), rounds: 1, validation: 'Checks passed', userResolution: 'Preserve v1 behavior' };
+    store.save(session);
+    expect(store.load(session.id)?.integration).toEqual(session.integration);
+    session.integration.reviewer = 'claude';
+    expect(() => store.save(session)).toThrow('Invalid session');
+  });
   it('persists permission controls and native model/effort defaults across reopening', () => {
     const { store, session } = fixture();
     session.demo = false; session.scope = 'build';

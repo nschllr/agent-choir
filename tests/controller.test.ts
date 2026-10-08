@@ -307,6 +307,113 @@ function finishedBuild(): Session {
   return session;
 }
 
+describe('agent-owned integration', () => {
+  const revision = 'a'.repeat(40);
+  const report = (outcome: import('../src/types.js').IntegrationOutcome, hash = '', summary = 'Combined tests and contract checks passed'): AgentReply => ({ message: summary, actions: [{ type: 'integration_report', outcome, revision: hash, summary }] });
+  function fixture(session?: Session) {
+    const s = session ?? finishedBuild();
+    s.integration ??= { status: 'pending' };
+    const f = setup(s);
+    const merge = vi.fn(async () => ({ path: '/tmp/integration', conflicts: true }));
+    const finishIntegration = vi.fn(async () => ({ path: '/tmp/integration', conflicts: false, revision }));
+    const verifyIntegration = vi.fn(async () => true);
+    const prepareIntegration = vi.fn(async (value: Session) => ({ cwd: '/tmp/integration', writable: value.integration?.status === 'resolving' && value.scope === 'build' }));
+    Object.assign(f.workspaces, { merge, finishIntegration, verifyIntegration, prepareIntegration });
+    return { ...f, merge, finishIntegration, verifyIntegration, prepareIntegration };
+  }
+  it('resolves and validates with one peer then obtains read-only review without a manual checkpoint', async () => {
+    const f = fixture();
+    f.claude.automatic = call => call.resolve(report('ready'));
+    f.codex.automatic = call => call.resolve(report('accept', revision));
+    await f.controller.start(); await f.controller.wait();
+    expect(f.claude.calls).toHaveLength(1); expect(f.codex.calls).toHaveLength(1);
+    expect(f.claude.calls[0].turn).toMatchObject({ cwd: '/tmp/integration', writable: true });
+    expect(f.codex.calls[0].turn).toMatchObject({ cwd: '/tmp/integration', writable: false });
+    expect(f.claude.calls[0].turn.prompt).toContain('resolve remaining conflicts');
+    expect(f.codex.calls[0].turn.prompt).toContain(revision);
+    expect(f.finishIntegration).toHaveBeenCalledOnce();
+    expect(f.controller.getView().session).toMatchObject({ status: 'complete', integration: { status: 'accepted', revision, owner: 'claude', reviewer: 'codex', validation: 'Combined tests and contract checks passed' } });
+    expect(f.saved.some(s => s.integration?.status === 'peer_review' && s.integration.revision === revision)).toBe(true);
+  });
+  it('starts integration automatically after the final implementation finish', async () => {
+    const s = finishedBuild(), f = fixture(s);
+    delete s.integration;
+    f.codex.automatic = (call, n) => call.resolve(n === 1 ? { message: 'Implementation complete', actions: [{ type: 'finish', summary: 'Done' }] } : report('accept', revision));
+    f.claude.automatic = call => call.resolve(report('ready'));
+    await f.controller.start(); await f.controller.wait();
+    expect(f.merge).toHaveBeenCalledOnce();
+    expect(f.controller.getView().session.integration?.status).toBe('accepted');
+  });
+  it('lets the integration owner consult the peer before finalizing', async () => {
+    const f = fixture();
+    f.claude.automatic = (call, n) => call.resolve(n === 1 ? report('consult', '', 'Which behavior should this API preserve?') : report('ready'));
+    f.codex.automatic = (call, n) => call.resolve(n === 1 ? report('advice', '', 'Preserve the documented fallback') : report('accept', revision));
+    await f.controller.start(); await f.controller.wait();
+    expect(f.codex.calls[0].turn.prompt).toContain('Which behavior should this API preserve?');
+    expect(f.claude.calls[1].turn.prompt).toContain('Preserve the documented fallback');
+    expect(f.codex.calls.every(call => !call.turn.writable)).toBe(true);
+    expect(f.controller.getView().session.integration?.status).toBe('accepted');
+  });
+  it('escalates after the initial review and two unsuccessful fix rounds and honors the user resolution', async () => {
+    const f = fixture();
+    f.claude.automatic = call => call.resolve(report('ready'));
+    f.codex.automatic = call => call.resolve(report('changes_requested', revision, 'Contract mismatch remains'));
+    await f.controller.start(); await f.controller.wait();
+    expect(f.codex.calls).toHaveLength(3);
+    expect(f.controller.getView().session).toMatchObject({ status: 'waiting_user', integration: { status: 'waiting_user', rounds: 3 } });
+    await expect(f.controller.start()).rejects.toThrow('/resolve integration');
+    await f.controller.resolve('integration', 'Keep the documented v1 contract');
+    f.codex.automatic = call => call.resolve(report('accept', revision));
+    await f.controller.start(); await f.controller.wait();
+    expect(f.claude.calls[3].turn.prompt).toContain('Keep the documented v1 contract');
+    expect(f.controller.getView().session.integration?.status).toBe('accepted');
+  });
+  it('rejects stale review hashes and revalidates a candidate changed during review', async () => {
+    const f = fixture(); let checks = 0;
+    f.verifyIntegration.mockImplementation(async () => ++checks !== 2);
+    f.claude.automatic = call => call.resolve(report('ready'));
+    f.codex.automatic = (call, n) => call.resolve(report('accept', n === 1 ? 'b'.repeat(40) : revision));
+    await f.controller.start(); await f.controller.wait();
+    expect(f.claude.calls).toHaveLength(2); expect(f.codex.calls).toHaveLength(3);
+    expect(f.controller.getView().session.messages.some(m => m.text.includes('exact candidate revision'))).toBe(true);
+    expect(f.controller.getView().session.integration?.status).toBe('accepted');
+  });
+  it('pauses during review and resumes the saved review without rerunning the owner or merge', async () => {
+    const f = fixture();
+    f.claude.automatic = call => call.resolve(report('ready'));
+    await f.controller.start(); await expectCalls(f.codex, 1);
+    await f.controller.pause();
+    expect(f.codex.calls[0].turn.signal.aborted).toBe(true);
+    const saved = f.controller.getView().session;
+    expect(saved.integration?.status).toBe('peer_review');
+    const resumed = fixture(saved);
+    resumed.codex.automatic = call => call.resolve(report('accept', revision));
+    await resumed.controller.start(); await resumed.controller.wait();
+    expect(resumed.merge).not.toHaveBeenCalled(); expect(resumed.claude.calls).toHaveLength(0);
+    expect(resumed.controller.getView().session.integration?.status).toBe('accepted');
+  });
+  it('stops at the turn budget and retains the exact review phase for resume', async () => {
+    const s = finishedBuild(); s.maxTurns = s.turns + 1;
+    const f = fixture(s);
+    f.claude.automatic = call => call.resolve(report('ready'));
+    await f.controller.start(); await f.controller.wait();
+    expect(f.codex.calls).toHaveLength(0);
+    expect(f.controller.getView().session).toMatchObject({ status: 'paused', integration: { status: 'peer_review' } });
+    f.codex.automatic = call => call.resolve(report('accept', revision));
+    await f.controller.start(); await f.controller.wait();
+    expect(f.controller.getView().session.integration?.status).toBe('accepted');
+  });
+  it('preserves legacy direct recipients after automated integration instead of declaring them complete', async () => {
+    const s = finishedBuild(); s.interaction = 'chat'; s.pendingRecipients = ['codex'];
+    const f = fixture(s);
+    f.claude.automatic = call => call.resolve(report('ready'));
+    f.codex.automatic = call => call.resolve(report('accept', revision));
+    await f.controller.start(); await f.controller.wait();
+    expect(f.controller.getView().session).toMatchObject({ status: 'paused', pendingRecipients: ['codex'], integration: { status: 'accepted' } });
+    expect(f.codex.calls).toHaveLength(1);
+  });
+});
+
 describe('autonomous collaboration controller', () => {
   it('passes each saved model selection and native session ID to its provider', async () => {
     const session = createSession({ project: '/tmp/project', scope: 'discuss', brief: 'Compare designs' });

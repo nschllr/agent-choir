@@ -20,11 +20,19 @@ export interface Decision {
   userResolution?: string;
   needsRevision?: boolean;
 }
+export type IntegrationOutcome = 'ready' | 'accept' | 'changes_requested' | 'consult' | 'advice' | 'blocked';
+export interface IntegrationState {
+  status: 'pending' | 'conflicts' | 'review' | 'accepted' | 'resolving' | 'peer_review' | 'consulting' | 'waiting_user';
+  path?: string; notes?: string; owner?: AgentId; reviewer?: AgentId;
+  revision?: string; validation?: string; rounds?: number; userResolution?: string;
+}
+export interface IntegrationCandidate { path: string; conflicts: boolean; revision?: string; needsValidation?: boolean }
 export type CollaborationAction =
   | { type: 'propose'; id: string; kind: 'plan' | 'decision'; title: string; proposal: string; tasks: TaskSpec[] }
   | { type: 'position'; id: string; version: number; position: Position; reason: string }
   | { type: 'complete_task'; id: string; summary: string }
   | { type: 'finish'; summary: string }
+  | { type: 'integration_report'; outcome: IntegrationOutcome; revision: string; summary: string }
   | { type: 'yield' };
 export interface AgentReply { message: string; actions: CollaborationAction[]; }
 export interface Message { id: string; at: string; from: AgentId | 'user' | 'system'; to: Recipient; text: string; delivery?: 'display-only'; }
@@ -63,7 +71,7 @@ export interface Session {
   pendingRecipients?: AgentId[];
   turns: number; maxTurns: number; maxMinutes: number; elapsedMs: number;
   demo: boolean; error?: string;
-  integration?: { status: 'pending' | 'review' | 'conflicts' | 'accepted'; path?: string; notes?: string };
+  integration?: IntegrationState;
 }
 export interface ProviderTurn {
   agent: AgentId; prompt: string; cwd: string; writable: boolean;

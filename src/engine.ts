@@ -58,6 +58,7 @@ export function applyReply(session: Session, agent: AgentId, input: AgentReply):
   const reply = parseReply(input), s = structuredClone(session);
   for (const a of reply.actions) {
     if (a.type === 'yield') continue;
+    if (a.type === 'integration_report') throw new Error('Integration reports are only valid during integration');
     if (a.type === 'propose') {
       validateTasks(a.tasks, agents);
       if (a.kind !== 'plan' && a.tasks.length) throw new Error('Only plans can assign tasks');

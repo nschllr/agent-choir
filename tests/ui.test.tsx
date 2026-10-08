@@ -439,7 +439,7 @@ describe('terminal collaboration workspace', () => {
     controller.acceptIntegration = vi.fn(async () => {});
     const screen = render(<App controller={controller}/>);
     await settle();
-    expect(screen.lastFrame()).toContain('Integration checkpoint');
+    expect(screen.lastFrame()).toContain('Integration · review');
     expect(screen.lastFrame()).toContain('/tmp/combined-candidate');
     expect(screen.lastFrame()).toContain('/accept');
     screen.stdin.write('/accept npm test passed on combined candidate'); await settle();

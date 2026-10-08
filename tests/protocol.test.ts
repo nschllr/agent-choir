@@ -2,6 +2,13 @@ import { describe, expect, it } from 'vitest';
 import { parseReply, REPLY_SCHEMA } from '../src/protocol.js';
 
 describe('collaboration envelope', () => {
+  it('parses explicit integration reports and validates their revision and evidence', () => {
+    const action = { type: 'integration_report', outcome: 'accept', revision: 'a'.repeat(40), summary: 'Reviewed the API and UI contracts; combined tests passed.' };
+    expect(parseReply({ message: 'Reviewed', actions: [action] }).actions).toEqual([action]);
+    expect(() => parseReply({ message: '', actions: [{ ...action, summary: '' }] })).toThrow();
+    expect(() => parseReply({ message: '', actions: [{ ...action, revision: 'HEAD' }] })).toThrow();
+    expect(() => parseReply({ message: '', actions: [{ ...action, outcome: 'merge_original' }] })).toThrow();
+  });
   it('parses exact structured JSON without interpreting conversational agreement', () => {
     expect(parseReply('{"message":"I agree","actions":[]}')).toEqual({ message: 'I agree', actions: [] });
     expect(REPLY_SCHEMA.additionalProperties).toBe(false);

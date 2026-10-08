@@ -77,7 +77,7 @@ Natural-language agreement alone never changes permissions.
 - [x] Foundation, decision engine, and persistence.
 - [x] Terminal workspace and offline demo.
 - [x] Native provider adapters and orchestration (protocol fixtures and live discuss smoke test).
-- [x] Isolated build workspaces and integration workflow with manual combined validation.
+- [x] Isolated build workspaces, agent-owned conflict resolution/validation, and peer review of the combined revision.
 - [x] Tests, review, and usage documentation.
 
 ## Initial implementation boundaries and next evaluation
@@ -102,8 +102,9 @@ Natural-language agreement alone never changes permissions.
   independent tasks, dependency integration, and a verified combined candidate.
   The broader acceptance exercise remains open. See `docs/testing.md` for evidence
   and limits of these bounded tests.
-- Combined build validation is an explicit user checkpoint (`/accept` with evidence).
-  Automated combined validation is a later milestone.
+- Combined integration is assigned to an owner for conflict resolution and validation, then
+  reviewed by the peer against an exact candidate revision. Unresolved feedback escalates
+  to the user; legacy/manual checkpoints retain `/accept` support.
 - Escalated decisions currently pause the whole session. Continuing unrelated work
   through a decision checkpoint needs a decision-to-task dependency model.
 - Native runtime permissions are enforced before writes, and native processes have

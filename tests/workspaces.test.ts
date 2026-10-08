@@ -5,6 +5,8 @@ import { join } from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { GitWorkspaceManager } from '../src/workspaces.js';
+import { DuetController } from '../src/controller.js';
+import { SessionStore } from '../src/store.js';
 import { createSession } from '../src/engine.js';
 import type { Session, TaskSpec } from '../src/types.js';
 
@@ -28,6 +30,38 @@ async function fixture(tasks?: TaskSpec[]) {
 afterEach(async () => { for (const dir of dirs.splice(0)) await rm(dir, { recursive: true, force: true }); });
 
 describe('isolated build workspaces', () => {
+  it('completes conflict resolution and peer review through the controller while preserving the original checkout', async () => {
+    const f = await fixture();
+    const first = await f.manager.prepare(f.s, 'claude'), second = await f.manager.prepare(f.s, 'codex');
+    await writeFile(join(first.cwd, 'shared.txt'), 'First implementation\n');
+    await writeFile(join(second.cwd, 'shared.txt'), 'Second implementation\n');
+    f.s.completedTasks = { a: 'Done', b: 'Done' };
+    await f.manager.finalize(f.s, 'claude'); await f.manager.finalize(f.s, 'codex');
+    f.s.finished = { claude: 'Done', codex: 'Done' }; f.s.integration = { status: 'pending' }; f.s.status = 'paused';
+    const store = new SessionStore(join(f.root, 'sessions'));
+    const controller = new DuetController(f.s, {
+      claude: { id: 'claude', async dispose() {}, async run(turn) {
+        expect(turn.writable).toBe(true);
+        expect(turn.cwd).not.toBe(f.project);
+        expect(await readFile(join(turn.cwd, 'shared.txt'), 'utf8')).toContain('<<<<<<<');
+        await writeFile(join(turn.cwd, 'shared.txt'), 'Combined implementation\n');
+        return { message: 'Resolved both implementations and checked the combined behavior.', actions: [{ type: 'integration_report', outcome: 'ready', revision: '', summary: 'Combined behavior validated on the fixture.' }] };
+      } },
+      codex: { id: 'codex', async dispose() {}, async run(turn) {
+        expect(turn.writable).toBe(false);
+        expect(await readFile(join(turn.cwd, 'shared.txt'), 'utf8')).toBe('Combined implementation\n');
+        return { message: 'Both implementations are represented.', actions: [{ type: 'integration_report', outcome: 'accept', revision: await git(turn.cwd, 'rev-parse', 'HEAD'), summary: 'Reviewed both task diffs and the resolved content.' }] };
+      } },
+    }, store, f.manager);
+    try {
+      await controller.start(); await controller.wait();
+      expect(controller.getView().session).toMatchObject({ status: 'complete', integration: { status: 'accepted', owner: 'claude', reviewer: 'codex' } });
+      expect(store.load(f.s.id)?.integration?.status).toBe('accepted');
+      expect(await readFile(join(f.project, 'shared.txt'), 'utf8')).toBe('original\n');
+      expect(await git(f.project, 'rev-parse', 'HEAD')).toBe(f.base);
+      expect(await git(f.project, 'status', '--porcelain')).toBe('');
+    } finally { await controller.close(); store.close(); }
+  });
   it('allows direct project editing without a plan, clean Git state or even a repository', async () => {
     const f = await fixture();
     f.s.interaction = 'chat'; f.s.decisions = [];
@@ -94,7 +128,7 @@ describe('isolated build workspaces', () => {
     expect(await f.manager.prepare(f.s, 'codex')).toEqual(other);
     expect(await git(f.project, 'rev-parse', 'HEAD')).toBe(f.base);
   });
-  it('aborts conflicting integration and preserves original and agent branches', async () => {
+  it('preserves integration conflicts for agent resolution and verifies the reviewed revision', async () => {
     const f = await fixture();
     const c = await f.manager.prepare(f.s, 'claude'), d = await f.manager.prepare(f.s, 'codex');
     await writeFile(join(c.cwd, 'shared.txt'), 'Claude version\n');
@@ -103,7 +137,19 @@ describe('isolated build workspaces', () => {
     const claudeCommit = await f.manager.finalize(f.s, 'claude'), codexCommit = await f.manager.finalize(f.s, 'codex');
     const result = await f.manager.merge(f.s);
     expect(result.conflicts).toBe(true);
-    expect(await git(result.path, 'status', '--porcelain')).toBe('');
+    expect(await git(result.path, 'diff', '--name-only', '--diff-filter=U')).toBe('shared.txt');
+    await expect(f.manager.finishIntegration(f.s)).rejects.toThrow('conflict markers');
+    f.s.integration = { status: 'resolving', path: result.path, owner: 'claude', reviewer: 'codex' };
+    expect(await f.manager.prepareIntegration(f.s, 'claude')).toEqual({ cwd: result.path, writable: true });
+    await expect(f.manager.prepareIntegration(f.s, 'codex')).rejects.toThrow('Wrong integration');
+    await writeFile(join(result.path, 'shared.txt'), 'Combined behavior\n');
+    const combined = await new GitWorkspaceManager(f.stateDir).finishIntegration(f.s);
+    expect(combined.conflicts).toBe(false);
+    expect(await f.manager.verifyIntegration(f.s, combined.revision!)).toBe(true);
+    f.s.integration.status = 'peer_review';
+    expect(await f.manager.prepareIntegration(f.s, 'codex')).toEqual({ cwd: result.path, writable: false });
+    await writeFile(join(result.path, 'shared.txt'), 'Changed during review\n');
+    expect(await f.manager.verifyIntegration(f.s, combined.revision!)).toBe(false);
     expect(await git(c.cwd, 'rev-parse', 'HEAD')).toBe(claudeCommit);
     expect(await git(d.cwd, 'rev-parse', 'HEAD')).toBe(codexCommit);
     expect(await readFile(join(f.project, 'shared.txt'), 'utf8')).toBe('original\n');

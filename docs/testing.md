@@ -253,8 +253,20 @@ A live Haiku attempt to read a temporary sibling directory and write a temporary
 project file stopped at Claude's OAuth-refresh error. No successful real-provider
 write validation is claimed for this change; the native protocol tests are offline.
 
-The first implementation has a manual combined-validation checkpoint. It does
-not automatically run the project's validation commands, assess semantic agreement,
-enforce file-to-task relevance, or allow independent tasks to continue through every
-escalated decision. Those require later implementation and real-provider evaluation.
+### Agent-owned integration verification — 2026-10-08
+
+The full check passed 294 tests, followed by a successful build and all 76 controller
+tests after adding a regression for queued direct recipients in older sessions.
+Coverage includes owner resolution and read-only peer review, consultation, repeated
+review findings and user escalation, exact revision checks, candidate changes during
+review, pause/restart recovery, and turn budgets. A real Git conflict fixture exercises
+the controller, scripted agents, workspace manager, and SQLite together: conflicts are
+resolved, the combined commit is reviewed, and the original checkout stays unchanged.
+These are offline tests; autonomous integration quality with live models remains unverified.
+
+Integration now assigns conflict resolution and combined validation to one agent,
+then requests peer review of the exact candidate revision. The harness checks Git
+state and records reported evidence; it does not independently prove semantic
+correctness, test coverage, or file-to-task relevance. Independent tasks still pause
+at escalated decisions. Further real-provider evaluation is needed.
 Passing the offline suite does not mark that production roadmap complete.

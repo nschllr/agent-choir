@@ -48,8 +48,18 @@ function validate(value: unknown): asserts value is Session {
   if (value.permissions !== undefined && (!validPermissions(value.permissions) || (value.permissions.mode === 'read-only') !== (value.scope !== 'build'))) return invalid();
   if (value.awaitingInput !== undefined && typeof value.awaitingInput !== 'boolean') return invalid();
   if (value.error !== undefined && typeof value.error !== 'string') return invalid();
-  if (value.integration !== undefined && (!isRecord(value.integration) || !member(value.integration.status, ['pending', 'review', 'conflicts', 'accepted']) ||
+  if (value.integration !== undefined && (!isRecord(value.integration) || !member(value.integration.status, ['pending', 'review', 'conflicts', 'accepted', 'resolving', 'peer_review', 'consulting', 'waiting_user']) ||
     (value.integration.path !== undefined && typeof value.integration.path !== 'string') || (value.integration.notes !== undefined && typeof value.integration.notes !== 'string'))) return invalid();
+  if (isRecord(value.integration)) {
+    const i = value.integration;
+    for (const key of ['owner', 'reviewer']) if (i[key] !== undefined && !member(i[key], agents)) return invalid();
+    if ((i.owner !== undefined || i.reviewer !== undefined) && (!i.owner || !i.reviewer || i.owner === i.reviewer)) return invalid();
+    if (['resolving', 'peer_review', 'consulting', 'waiting_user'].includes(i.status as string) && (!i.owner || !i.reviewer)) return invalid();
+    if (i.revision !== undefined && (typeof i.revision !== 'string' || !/^[0-9a-f]{40,64}$/.test(i.revision))) return invalid();
+    if (i.status === 'peer_review' && !i.revision) return invalid();
+    if (i.rounds !== undefined && (!Number.isSafeInteger(i.rounds) || (i.rounds as number) < 0)) return invalid();
+    for (const key of ['validation', 'userResolution']) if (i[key] !== undefined && typeof i[key] !== 'string') return invalid();
+  }
   if (!Array.isArray(value.messages) || !value.messages.every(item => isRecord(item) && ['id', 'at', 'text'].every(key => typeof item[key] === 'string') && member(item.from, ['user', 'system', ...agents]) && member(item.to, ['both', ...agents]) && (item.delivery === undefined || (item.delivery === 'display-only' && member(item.from, ['system', ...agents]))))) return invalid();
   if (!Array.isArray(value.activities) || !value.activities.every(item => isRecord(item) && ['id', 'at', 'text'].every(key => typeof item[key] === 'string') && member(item.agent, agents) && member(item.kind, ['tool', 'status', 'error']))) return invalid();
   if (!Array.isArray(value.decisions)) return invalid();

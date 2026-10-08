@@ -4,7 +4,7 @@ import { promisify } from 'node:util';
 import { lstat, mkdir, readFile, realpath, rename, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { canImplement } from './engine.js';
-import { type AgentId, type Session, type WorkspaceAccess, type WorkspaceManager } from './types.js';
+import { type AgentId, type Session, type WorkspaceAccess, type WorkspaceManager, type IntegrationCandidate } from './types.js';
 
 const exec = promisify(execFile);
 interface BranchState { path: string; branch: string; completed: string[]; finalizedCommit?: string; }
@@ -115,7 +115,7 @@ export class GitWorkspaceManager implements WorkspaceManager {
     await this.save(s, state);
     return created;
   }
-  private async mergeBranch(target: BranchState, source: BranchState): Promise<boolean> {
+  private async mergeBranch(target: BranchState, source: BranchState, preserveConflict = false): Promise<boolean> {
     // Integrate a finalized snapshot, never a live branch that may contain unfinished work.
     const commit = source.finalizedCommit;
     if (!commit) throw new Error('Source workspace has no finalized commit');
@@ -126,7 +126,7 @@ export class GitWorkspaceManager implements WorkspaceManager {
       // Abort only an actual merge conflict. Preserve every branch and worktree.
       try { await git(target.path, 'rev-parse', '--verify', 'MERGE_HEAD'); }
       catch { throw error; }
-      await git(target.path, 'merge', '--abort');
+      if (!preserveConflict) await git(target.path, 'merge', '--abort');
       return false;
     }
   }
@@ -173,16 +173,71 @@ export class GitWorkspaceManager implements WorkspaceManager {
       return commit;
     });
   }
-  merge(s: Session): Promise<{ path: string; conflicts: boolean }> {
+  private async hasMerge(path: string): Promise<boolean> {
+    try { await git(path, 'rev-parse', '--verify', 'MERGE_HEAD'); return true; } catch { return false; }
+  }
+  private async mergeSources(s: Session, state: WorkspaceState, target: BranchState): Promise<IntegrationCandidate> {
+    if (await this.hasMerge(target.path)) return { path: target.path, conflicts: true };
+    for (const agent of agentIds(s)) {
+      const source = state.agents[agent];
+      if (source?.completed.length && !await this.mergeBranch(target, source, true)) return { path: target.path, conflicts: true };
+    }
+    return { path: target.path, conflicts: false, revision: await git(target.path, 'rev-parse', 'HEAD') };
+  }
+  merge(s: Session): Promise<IntegrationCandidate> {
     return this.serial(async () => {
       const state = await this.load(s);
       if (!state) throw new Error('No build workspaces exist for this session');
       const target = await this.branch(s, state, 'integration');
-      for (const agent of agentIds(s)) {
-        const source = state.agents[agent];
-        if (source?.completed.length && !await this.mergeBranch(target, source)) return { path: target.path, conflicts: true };
+      return this.mergeSources(s, state, target);
+    });
+  }
+  prepareIntegration(s: Session, agent: AgentId): Promise<WorkspaceAccess> {
+    return this.serial(async () => {
+      const i = s.integration;
+      const expected = i?.status === 'resolving' ? i.owner : i?.reviewer;
+      if (!i || agent !== expected) throw new Error('Wrong integration participant');
+      const state = await this.load(s);
+      if (!state?.integration) throw new Error('No integration workspace exists');
+      const target = await this.branch(s, state, 'integration');
+      return { cwd: target.path, writable: i.status === 'resolving' && s.scope === 'build' && !s.demo };
+    });
+  }
+  finishIntegration(s: Session): Promise<IntegrationCandidate> {
+    return this.serial(async () => {
+      const state = await this.load(s);
+      if (!state?.integration) throw new Error('No integration workspace exists');
+      const target = await this.branch(s, state, 'integration');
+      try { await git(target.path, 'diff', '--check'); }
+      catch (error) { throw new Error('Integration still has conflict markers or whitespace errors', { cause: error }); }
+      await git(target.path, 'diff', '--cached', '--check');
+      if (await this.hasMerge(target.path) || await git(target.path, 'status', '--porcelain', '--untracked-files=all')) {
+        await git(target.path, 'add', '--all');
+        if (await git(target.path, 'diff', '--name-only', '--diff-filter=U')) throw new Error('Integration still has unresolved merge conflicts');
+        await git(target.path, 'diff', '--cached', '--check');
+        await git(target.path, 'commit', '-m', 'Resolve and validate integrated agent work');
       }
-      return { path: target.path, conflicts: false };
+      // More finalized branches can remain after the first conflict was resolved.
+      const validatedHead = await git(target.path, 'rev-parse', 'HEAD');
+      const merged = await this.mergeSources(s, state, target);
+      return { ...merged, needsValidation: !merged.conflicts && merged.revision !== validatedHead };
+    });
+  }
+  verifyIntegration(s: Session, revision: string): Promise<boolean> {
+    return this.serial(async () => {
+      const state = await this.load(s);
+      if (!state?.integration || !/^[0-9a-f]{40,64}$/.test(revision)) return false;
+      const target = await this.branch(s, state, 'integration');
+      if (await git(target.path, 'rev-parse', 'HEAD') !== revision || await this.hasMerge(target.path)
+        || await git(target.path, 'status', '--porcelain', '--untracked-files=all')) return false;
+      try { await git(target.path, 'diff', '--check', state.base, revision); } catch { return false; }
+      const tasks = s.decisions.find(d => d.kind === 'plan')?.tasks ?? [];
+      for (const task of tasks) {
+        const source = state.agents[task.owner];
+        if (!source?.finalizedCommit || !source.completed.includes(task.id) || !Object.hasOwn(s.completedTasks, task.id)) return false;
+        try { await git(target.path, 'merge-base', '--is-ancestor', source.finalizedCommit, revision); } catch { return false; }
+      }
+      return true;
     });
   }
 }

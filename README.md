@@ -356,20 +356,38 @@ rejects completion of a sibling task on that turn. It commits the current owned
 worktree snapshot after task completion; it cannot prove that every changed file
 semantically belongs to that task. Review the resulting diff.
 
-Collaborative build completion includes a **manual combined-validation checkpoint**. Finalized
-agent commits are merged into a separate integration worktree. Inspect its diff,
-run the project's relevant checks there, then record the actual evidence:
+Collaborative build completion starts **agent-owned integration**. Git merges finalized
+agent commits into a separate integration worktree. Conflicts stay in that worktree
+for the integration owner to resolve; dependency synchronization during implementation
+still aborts conflicting merges and pauses without overwriting work.
+
+One peer owns resolving integration conflicts, fixing cross-component problems, and
+running the relevant combined checks. It can consult the other peer about ambiguous
+intent. When it reports readiness, the harness commits the resolved candidate and
+checks that every completed task commit is included. The other peer then reviews
+that exact Git revision with read-only access, including the combined diff and the
+owner's validation evidence. Review findings return to the owner for fixes and fresh
+validation. A changed or dirty candidate cannot receive a stale approval.
+
+The initial rejected review plus two unsuccessful fix rounds escalates to you.
+Either peer can also report a product decision that only you can make. Resolve it with:
 
 ```text
-/accept Ran the project test suite in the integration worktree; all tests passed.
+/resolve integration Keep the documented v1 API behavior.
+/resume
 ```
 
-`/accept` records your evidence and completes the session. It does not run a
-validator or merge into your original branch. Choose how to adopt the candidate
-through your normal Git workflow. If integration conflicts, the attempted merge
-is aborted and all work is preserved. Resolve and commit the merge manually in
-the integration worktree, then `/resume` retries integration. Once the candidate
-is conflict-free, validate it and `/accept`.
+Your resolution remains part of the integration instructions. Pause/resume retains
+ownership, review revision, validation evidence, and pending questions. Integration
+uses the same turn/time budgets and permission controls as the rest of the session.
+Successful peer review completes the candidate; it **does not merge or push your
+original branch**. Adopt the integration branch through your normal Git workflow.
+
+Validation commands are selected and executed by the owner; the harness records its
+reported evidence rather than independently proving test coverage or correctness.
+Older manual integration checkpoints can be resumed into this workflow when two
+native peers are available. Legacy/manual adapters and single-peer checkpoints retain
+`/accept <your validation evidence>` support.
 
 ## Persistence, limits, and background work
 
