@@ -44,6 +44,7 @@ function controllerFixture(solo = false): UIController {
     setInitialAgent: vi.fn(async provider => update({ session: { ...state.session, agents: [{ id: provider, provider }] }, recipient: provider })),
     getModelOptions: vi.fn(async () => ({ defaultModel: 'model-a', models: [{ id: 'model-a', name: 'Model A', efforts: ['low', 'high'] }, { id: 'model-b', name: 'Model B', efforts: ['medium'] }] })),
     setModelSettings: vi.fn(async (agent, settings) => update({ session: { ...state.session, models: { ...state.session.models, [agent]: settings.model }, efforts: { ...state.session.efforts, [agent]: settings.effort } } })),
+    setPermissions: vi.fn(async settings => update({ session: { ...state.session, permissions: settings, scope: settings.mode === 'read-only' ? 'discuss' : 'build', status: 'paused' } })),
     setRecipient: vi.fn(to => update({ recipient: to })),
     setDelivery: vi.fn(delivery => update({ delivery })),
   };
@@ -61,6 +62,27 @@ describe('terminal text handling', () => {
 });
 
 describe('terminal collaboration workspace', () => {
+  it('changes session permissions through the picker without sending or losing a draft', async () => {
+    const controller = controllerFixture(true), mouse = new MouseEvents();
+    controller.getView().session.demo = false;
+    const screen = render(<App controller={controller} mouse={mouse}/>); await settle();
+    screen.stdin.write('Preserve draft'); await settle();
+    screen.stdin.write('\x0c'); await settle();
+    expect(screen.lastFrame()).toContain('Session permissions');
+    mouse.emit('mouse', { action: 'click', x: 10, y: 5 });
+    screen.stdin.write('\x1b[B'); await settle();
+    screen.stdin.write('a'); await settle(); screen.stdin.write('../shared'); await settle(); screen.stdin.write('\r'); await settle();
+    screen.stdin.write('\r'); await settle();
+    expect(controller.setPermissions).toHaveBeenCalledWith({ mode: 'project', additionalDirectories: ['../shared'] });
+    expect(screen.lastFrame()).toContain('Preserve draft');
+    expect(screen.lastFrame()).toContain('project edits');
+    expect(controller.send).not.toHaveBeenCalled(); expect(controller.setRecipient).not.toHaveBeenCalled();
+    screen.stdin.write('\x15'); await settle(); screen.stdin.write('/permissions full'); await settle(); screen.stdin.write('\r'); await settle();
+    expect(controller.setPermissions).toHaveBeenLastCalledWith({ mode: 'full', additionalDirectories: ['../shared'] });
+    expect(screen.lastFrame()).toContain('full access');
+    screen.stdin.write('\x0c'); await settle(); screen.stdin.write('\x1b[B'); await settle(); screen.stdin.write('\x1b'); await settle();
+    expect(controller.setPermissions).toHaveBeenCalledTimes(2);
+  });
   it('shows the saved session error without requiring tool activity to be enabled', async () => {
     const controller = controllerFixture();
     controller.getView().session.status = 'error';

@@ -41,6 +41,46 @@ function setup(session?: Session) {
 }
 const expectCalls = async (provider: FakeProvider, count: number) => { await vi.waitFor(() => expect(provider.calls).toHaveLength(count), { interval: 5, timeout: 1000 }); };
 
+describe('session permissions', () => {
+  it('upgrades a saved read-only session, resolves extra directories and preserves idle input', async () => {
+    const s = createSession({ project: '/tmp', scope: 'discuss', brief: '', agents: [{ id: 'codex', provider: 'codex' }] });
+    const { controller, saved, codex } = setup(s);
+    await controller.setPermissions({ mode: 'project', additionalDirectories: ['.', '/tmp'] });
+    expect(saved.at(-1)).toMatchObject({ scope: 'build', awaitingInput: true, permissions: { mode: 'project', additionalDirectories: ['/tmp'] } });
+    expect(codex.calls).toHaveLength(0);
+    const resumed = setup(saved.at(-1));
+    expect(resumed.controller.getView().session.permissions).toEqual({ mode: 'project', additionalDirectories: ['/tmp'] });
+    await expect(controller.setPermissions({ mode: 'full', additionalDirectories: ['/nonexistent/duet-directory'] })).rejects.toThrow();
+    expect(controller.getView().session.permissions?.mode).toBe('project');
+  });
+  it('stops active turns before downgrading and keeps work pending for explicit resume', async () => {
+    const s = createSession({ project: '/tmp', scope: 'build', brief: 'Edit requested file', agents: [{ id: 'codex', provider: 'codex' }] });
+    const { controller, codex, workspaces } = setup(s);
+    workspaces.prepare.mockImplementation(async value => ({ cwd: value.project, writable: value.scope === 'build' }));
+    await controller.start(); await expectCalls(codex, 1);
+    expect(codex.calls[0].turn.writable).toBe(true);
+    await controller.setPermissions({ mode: 'read-only', additionalDirectories: [] });
+    expect(codex.calls[0].turn.signal.aborted).toBe(true);
+    expect(controller.getView().session).toMatchObject({ scope: 'discuss', status: 'paused', pendingRecipients: ['codex'], awaitingInput: false });
+    expect(codex.calls).toHaveLength(1);
+    await controller.start(); await expectCalls(codex, 2);
+    expect(codex.calls[1].turn).toMatchObject({ writable: false, permissions: { mode: 'read-only', additionalDirectories: [] } });
+    expect(codex.calls[1].turn.prompt).toContain('Project files are read-only');
+  });
+  it('serializes write-enabled direct recipients while preserving both messages', async () => {
+    const s = createSession({ project: '/tmp', scope: 'build', brief: '', agents: [{ id: 'claude', provider: 'claude' }, { id: 'codex', provider: 'codex' }] });
+    const { controller, claude, codex } = setup(s);
+    await controller.send('Edit the requested files', 'both');
+    await expectCalls(claude, 1);
+    expect(codex.calls).toHaveLength(0);
+    claude.calls[0].resolve(emptyReply('First edit done'));
+    await expectCalls(codex, 1);
+    codex.calls[0].resolve(emptyReply('Second edit done'));
+    await controller.wait();
+    expect(controller.getView().session).toMatchObject({ pendingRecipients: [], awaitingInput: true });
+  });
+});
+
 describe('per-peer model and effort changes', () => {
   it('saves an independent selection without waking agents and restores it on resume', async () => {
     const { controller, saved, claude, codex } = setup();
@@ -219,7 +259,7 @@ describe('native context delivery checkpoints', () => {
     expect(controller.getView().session.contextCursors?.codex?.nativeSessionId).toBe('replacement-codex');
   });
 
-  it('delivers rejection feedback on the next turn without claiming rejected actions were accepted', async () => {
+  it('ignores legacy collaboration task actions in direct chat without recording completion', async () => {
     const { controller, codex } = setup(directSession());
     codex.automatic = call => {
       call.emit({ type: 'session', sessionId: 'native-codex' });
@@ -229,10 +269,10 @@ describe('native context delivery checkpoints', () => {
     expect(controller.getView().session.contextCursors?.codex?.inFlight).toBe(false);
     codex.automatic = call => answer(call, 'Corrected reply');
     await controller.send('Try again', 'codex'); await controller.wait();
-    expect(codex.calls[1].turn.prompt).toContain("Rejected codex's response");
+    expect(codex.calls[1].turn.prompt).not.toContain("Rejected codex's response");
     expect(codex.calls[1].turn.prompt).not.toContain(HARNESS_INSTRUCTIONS);
     expect(codex.calls[1].turn.prompt).not.toContain('ORIGINAL_DIRECT_REQUEST');
-    expect(controller.getView().session.messages.some(m => m.text === 'REJECTED_REPLY')).toBe(false);
+    expect(controller.getView().session.messages.some(m => m.text === 'REJECTED_REPLY')).toBe(true);
     expect(controller.getView().session.completedTasks).toEqual({});
   });
 
@@ -922,37 +962,32 @@ it.each([false, true])('finishes an edits-enabled discussion without integration
   expect(claude.calls.every(call => !call.turn.writable)).toBe(true);
 });
 
-it('finalizes a completed direct solo build and requires combined candidate validation without finish', async () => {
-  const session = createSession({ project: '/tmp/project', scope: 'build', brief: 'Implement the authorized component', agents: [{ id: 'codex', provider: 'codex' }] });
-  session.decisions = [{ id: 'plan', kind: 'plan', title: 'Component', proposal: 'Implement component', version: 1, tasks: [{ id: 'component', owner: 'codex', description: 'Implement component', dependsOn: [] }], rounds: 0, status: 'agreed', positions: { codex: { version: 1, position: 'accept', reason: 'Agreed' } } }];
+it('direct editing does not finalize worktrees or require an integration checkpoint', async () => {
+  const session = createSession({ project: '/tmp/project', scope: 'build', brief: 'Implement the requested component', agents: [{ id: 'codex', provider: 'codex' }] });
   const { controller, codex, workspaces, saved } = setup(session);
-  const finalize = vi.fn(async () => 'committed-component');
-  const merge = vi.fn(async () => ({ path: '/tmp/solo-candidate', conflicts: false }));
-  Object.assign(workspaces, { prepare: vi.fn(async () => ({ cwd: '/tmp/solo-worktree', writable: true })), finalize, merge });
-  codex.automatic = call => call.resolve({ message: 'Implemented and tested', actions: [{ type: 'complete_task', id: 'component', summary: 'Implemented and tested' }] });
+  const finalize = vi.fn(), merge = vi.fn();
+  Object.assign(workspaces, { prepare: vi.fn(async () => ({ cwd: session.project, writable: true })), finalize, merge });
+  codex.automatic = call => call.resolve(emptyReply('Implemented and tested'));
   await controller.start(); await controller.wait();
-  expect(codex.calls).toHaveLength(1); expect(finalize).toHaveBeenCalledOnce(); expect(merge).toHaveBeenCalledOnce();
-  expect(saved.some(value => value.integration?.status === 'pending' && value.status === 'paused')).toBe(true);
-  expect(controller.getView().session).toMatchObject({ status: 'paused', pendingRecipients: [], integration: { status: 'review', path: '/tmp/solo-candidate' } });
-  await expect(controller.start()).rejects.toThrow('awaiting validation');
-  await controller.acceptIntegration('Component and combined tests pass');
-  expect(controller.getView().session).toMatchObject({ status: 'complete', integration: { status: 'accepted' } });
+  expect(codex.calls).toHaveLength(1);
+  expect(codex.calls[0].turn).toMatchObject({ cwd: session.project, writable: true });
+  expect(codex.calls[0].turn.prompt).toContain('no plan vote or task assignment is required');
+  expect(finalize).not.toHaveBeenCalled(); expect(merge).not.toHaveBeenCalled();
+  expect(saved.every(value => !value.integration)).toBe(true);
+  expect(controller.getView().session).toMatchObject({ status: 'paused', pendingRecipients: [], awaitingInput: true });
 });
 
-it('retains other direct recipients across a completed build integration checkpoint', async () => {
+it('ignores legacy task completion and continues to the next direct recipient', async () => {
   const session = createSession({ project: '/tmp/project', scope: 'build', brief: '', agents: [{ id: 'codex', provider: 'codex' }, { id: 'claude', provider: 'claude' }] });
   session.decisions = [{ id: 'plan', kind: 'plan', title: 'Component', proposal: 'Implement component', version: 1, tasks: [{ id: 'component', owner: 'codex', description: 'Implement component', dependsOn: [] }], rounds: 0, status: 'agreed', positions: { codex: { version: 1, position: 'accept', reason: 'Agreed' }, claude: { version: 1, position: 'accept', reason: 'Agreed' } } }];
   const { controller, codex, claude, workspaces } = setup(session);
   Object.assign(workspaces, { prepare: vi.fn(async (_s: Session, id: string) => ({ cwd: '/tmp/worktree', writable: id === 'codex' })), finalize: vi.fn(async () => 'commit'), merge: vi.fn(async () => ({ path: '/tmp/candidate', conflicts: false })) });
   codex.automatic = call => call.resolve({ message: 'Implemented', actions: [{ type: 'complete_task', id: 'component', summary: 'Implemented' }] });
+  claude.automatic = call => call.resolve(emptyReply('Review response'));
   await controller.send('Complete and discuss the authorized component', 'both'); await controller.wait();
   expect(claude.calls).toHaveLength(1);
-  expect(claude.calls[0]!.turn.signal.aborted).toBe(true);
-  expect(controller.getView().session.pendingRecipients).toEqual(['claude']);
-  await controller.acceptIntegration('Combined tests pass');
-  expect(controller.getView().session).toMatchObject({ status: 'paused', pendingRecipients: ['claude'] });
-  claude.automatic = call => call.resolve(emptyReply('Review response'));
-  await controller.start(); await controller.wait();
-  expect(codex.calls).toHaveLength(1); expect(claude.calls).toHaveLength(2);
+  expect(controller.getView().session.integration).toBeUndefined();
+  expect(controller.getView().session.completedTasks).toEqual({});
+  expect(codex.calls).toHaveLength(1); expect(claude.calls).toHaveLength(1);
   expect(controller.getView().session).toMatchObject({ awaitingInput: true, pendingRecipients: [] });
 });

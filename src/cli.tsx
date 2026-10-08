@@ -14,6 +14,8 @@ import { ClaudeProvider, CodexProvider } from './providers/index.js';
 import { runTerminal } from './ui/terminal.js';
 import { resumeCommand } from './resume-command.js';
 import { validModel, claudeEfforts, codexEfforts } from './model-settings.js';
+import { permissionModes, sessionPermissions } from './permissions.js';
+import type { PermissionSettings } from './types.js';
 import { agentName, isProvider, sessionAgents } from './agents.js';
 import { terminalText } from './ui/text.js';
 import { connectController, serveController } from './background.js';
@@ -35,7 +37,9 @@ Usage:
   agent-duet --doctor                       Inspect local prerequisites, no model calls
 
 Options:
-  --read-only                 Prevent project edits (default permits approved implementation)
+  --read-only                 Prevent project edits (default permits direct project editing)
+  --permissions MODE          read-only, project (default), or full; also works with --resume
+  --allow-dir PATH            Allow an extra directory; repeat for multiple directories
   --agent codex|claude          Initial provider (default Codex)
   --peer codex|claude           Optional second provider
   --collaborate                Explicitly start autonomous work on the supplied brief
@@ -55,6 +59,7 @@ Controls:
   Ctrl+B toggle collaboration · Ctrl+P pause/resume · Ctrl+O tools
   Ctrl+Y copy focused pane · Esc leaves copy mode · /copy
   Ctrl+R model/effort for focused pane · /model · /effort
+  Ctrl+L session permissions · /permissions [read-only|project|full]
   Enter send · Alt+Enter/Ctrl+J newline · Ctrl+C pause/exit
   PgUp/PgDn scroll · Alt+Up/Down one line · Home/End oldest/latest · Ctrl+F scroll pane
   /help /split /agent /collaborate [TASK] /chat /pause /resume /to /steer /resolve ID choice /accept evidence /detach /quit
@@ -89,13 +94,17 @@ async function main(): Promise<void> {
     'state-dir': { type: 'string' }, 'max-turns': { type: 'string' }, 'max-minutes': { type: 'string' },
     'claude-model': { type: 'string' }, 'codex-model': { type: 'string' }, 'claude-effort': { type: 'string' }, 'codex-effort': { type: 'string' },
     agent: { type: 'string' }, peer: { type: 'string' },
+    permissions: { type: 'string' }, 'allow-dir': { type: 'string', multiple: true },
     collaborate: { type: 'boolean' },
   } });
   if (values.help) { console.log(HELP); return; }
+  if (values.permissions !== undefined && !permissionModes.includes(values.permissions as PermissionSettings['mode'])) throw new Error('--permissions must be read-only, project, or full');
+  if ((values['read-only'] || (values.scope !== undefined && values.scope !== 'build')) && values.permissions && values.permissions !== 'read-only') throw new Error('Read-only scope conflicts with writable --permissions');
+  if (values.attach && (values.permissions || values['allow-dir'])) throw new Error('Use /permissions inside the attached session');
   if (values.doctor) { doctor(); return; }
   if (values.scope !== undefined && !['discuss', 'plan', 'build'].includes(values.scope)) throw new Error('Legacy --scope must be discuss, plan, or build; use --read-only to prevent edits');
   if (values['read-only'] && values.scope === 'build') throw new Error('--read-only cannot be combined with --scope build');
-  if ((values.resume || values.attach || values.worker) && (values['read-only'] || values.scope !== undefined)) throw new Error('Saved sessions retain their permissions. Start a new session to change them.');
+  if ((values.resume || values.attach || values.worker) && (values['read-only'] || values.scope !== undefined)) throw new Error('Use --permissions with --resume, or /permissions in the TUI, to change saved session permissions.');
   for (const key of ['agent', 'peer'] as const) if (values[key] !== undefined && !isProvider(values[key])) throw new Error(`--${key} must be codex or claude`);
   if ((values.resume || values.attach || values.worker) && (values.agent || values.peer)) throw new Error('Saved sessions keep their agent instances; use the in-app agent picker to add a peer');
   if (values.collaborate && (values.resume || values.attach || values.worker)) throw new Error('Use /collaborate TASK in a saved session to start a new shared task');
@@ -163,6 +172,10 @@ async function main(): Promise<void> {
       return { id: agent.id, run: native.run.bind(native), dispose: native.dispose.bind(native), listModels: native.listModels.bind(native) };
     };
     controller = new DuetController(session, Object.fromEntries(sessionAgents(session).map(agent => [agent.id, factory(agent)])), store, new GitWorkspaceManager(stateDir), factory, new ContextMemory(stateDir));
+    if (values.permissions || values['allow-dir']) {
+      const settings = sessionPermissions(session);
+      await controller.setPermissions({ mode: (values.permissions as PermissionSettings['mode'] | undefined) ?? settings.mode, additionalDirectories: [...settings.additionalDirectories, ...(values['allow-dir'] ?? [])] });
+    }
     const launchWorker = async () => {
       const autoStart = values.detach || controller!.getView().session.status === 'running';
       await controller!.close(); release?.(); release = undefined; store.close();

@@ -1,7 +1,11 @@
 import { randomUUID } from 'node:crypto';
+import { realpath, stat } from 'node:fs/promises';
+import { resolve } from 'node:path';
+import { homedir } from 'node:os';
+import { sessionPermissions, validPermissions } from './permissions.js';
 import { nativeSessionTitle } from './session-label.js';
 import { claudeEfforts, codexEfforts, fallbackCatalog, validModelSettings } from './model-settings.js';
-import type { ModelCatalog, ModelSettings } from './types.js';
+import type { ModelCatalog, ModelSettings, PermissionSettings } from './types.js';
 import { applyReply, canImplement, resolveDecision } from './engine.js';
 import { buildContextDelivery, contextHash, contextMessages, hasPendingContext, messageHash } from './context-delivery.js';
 import type { ContextMemory } from './context-memory.js';
@@ -79,6 +83,29 @@ export class DuetController implements UIController {
     this.save();
   }
   private validateRecipient(to: Recipient): void { if (to !== 'both' && !this.ids().includes(to)) throw new Error('Unknown message recipient'); }
+  async setPermissions(settings: PermissionSettings): Promise<void> {
+    if (!validPermissions(settings)) throw new Error('Invalid permission settings');
+    if (this.state.session.demo && settings.mode !== 'read-only') throw new Error('Offline demo sessions remain read-only');
+    if (this.closed || this.rosterChanging) throw new Error('Session cannot change permissions now');
+    this.rosterChanging = true;
+    const idle = this.state.session.awaitingInput === true;
+    try {
+      const directories = await Promise.all(settings.additionalDirectories.map(async path => {
+        const absolute = await realpath(resolve(this.state.session.project, path === '~' ? homedir() : path.startsWith('~/') ? resolve(homedir(), path.slice(2)) : path));
+        if (!(await stat(absolute)).isDirectory()) throw new Error(`Not a directory: ${path}`);
+        return absolute;
+      }));
+      // Terminate old native turns before widening or narrowing access.
+      await this.pause();
+      if (this.closed) throw new Error('Session is closed');
+      const updated = structuredClone(this.state.session);
+      updated.permissions = { mode: settings.mode, additionalDirectories: [...new Set(directories)] };
+      updated.scope = settings.mode === 'read-only' ? 'discuss' : 'build';
+      updated.awaitingInput = idle;
+      updated.updatedAt = new Date().toISOString();
+      this.store.save(updated); this.state.session = updated; this.notify();
+    } finally { this.rosterChanging = false; }
+  }
   private successor(agent: AgentId): AgentId { const ids = this.ids(); return ids[(ids.indexOf(agent) + 1) % ids.length]!; }
   async setInitialAgent(provider: ProviderKind): Promise<void> {
     if (!isProvider(provider)) throw new Error('Unknown provider');
@@ -272,7 +299,7 @@ export class DuetController implements UIController {
     }
     if (canImplement(s)) {
       const ready = eligible.filter(readyTask);
-      if (ready.length) return ready;
+      if (ready.length) return sessionPermissions(s).mode === 'full' || sessionPermissions(s).additionalDirectories.length ? ready.slice(0, 1) : ready;
     }
     const next = eligible.includes(this.next) && !s.finished[this.next] ? this.next : eligible.find(a => !s.finished[a]);
     return next ? [next] : [];
@@ -313,7 +340,7 @@ export class DuetController implements UIController {
           this.stop('Turn limit reached. Resume explicitly to add 30 turns.'); break;
         }
         // Reserve a turn for each in-flight request, including results not yet applied.
-        const available = Math.max(0, s.maxTurns - s.turns - active.size);
+        const available = Math.min(Math.max(0, s.maxTurns - s.turns - active.size), s.scope === 'build' && !s.demo ? Math.max(0, 1 - active.size) : Infinity);
         const ready = (s.pendingRecipients ?? []).filter(agent => !active.has(agent)).slice(0, available);
         for (const agent of ready) {
           active.set(agent, this.runAgent(agent).then(
@@ -339,9 +366,9 @@ export class DuetController implements UIController {
       const chat = !isCollaborating(this.state.session);
       // Native resumed conversations may still emit an old finish action.
       const reply = { ...result.reply, message: result.reply.message.trim() ? result.reply.message : '',
-        actions: chat ? result.reply.actions.filter(action => action.type !== 'finish') : result.reply.actions };
+        actions: chat ? result.reply.actions.filter(action => action.type === 'yield') : result.reply.actions };
       const updated = applyReply(this.state.session, agent, reply);
-      if (result.reply.actions.some(a => a.type === 'complete_task')) await this.workspaces.finalize?.(updated, agent);
+      if (reply.actions.some(a => a.type === 'complete_task')) await this.workspaces.finalize?.(updated, agent);
       if (result.ticket !== this.tickets[agent] || this.state.session.status !== 'running') return;
       // Finalization may have awaited Git while the user added instructions.
       this.state.session = applyReply(this.state.session, agent, reply);
@@ -355,8 +382,7 @@ export class DuetController implements UIController {
         this.activity(agent, yielded ? 'Yielded; no peer reply requested. Waiting for new input.' : 'No message or actions; waiting for new input.');
       } else if (this.state.session.yieldedInputs) delete this.state.session.yieldedInputs[agent];
       const plan = this.state.session.decisions.find(decision => decision.kind === 'plan');
-      const finishedDirectBuild = chat && reply.actions.some(action => action.type === 'complete_task') && plan?.status === 'agreed' && this.state.session.decisions.every(decision => decision.status === 'agreed') && plan.tasks.every(task => Object.hasOwn(this.state.session.completedTasks, task.id));
-      if ((this.state.session.status === 'complete' || finishedDirectBuild) && this.state.session.scope === 'build' && plan?.tasks.length && !this.state.session.demo) {
+      if (!chat && this.state.session.status === 'complete' && this.state.session.scope === 'build' && plan?.tasks.length && !this.state.session.demo) {
         this.state.session.integration = { status: 'pending' }; this.state.session.status = 'paused';
       }
       this.state.streams[agent] = ''; this.next = this.successor(agent);
@@ -403,14 +429,14 @@ export class DuetController implements UIController {
       const workspace = snapshot.demo ? { cwd: snapshot.project, writable: false } : await this.workspaces.prepare(snapshot, agent);
       if (abort.signal.aborted) return;
       const initial = !snapshot.messages.some(m => m.from === agent);
-      const task = workspace.writable ? snapshot.decisions.find(d => d.kind === 'plan')?.tasks.find(t => t.owner === agent && !Object.hasOwn(snapshot.completedTasks, t.id) && t.dependsOn.every(id => Object.hasOwn(snapshot.completedTasks, id))) : undefined;
+      const task = workspace.writable && isCollaborating(snapshot) ? snapshot.decisions.find(d => d.kind === 'plan')?.tasks.find(t => t.owner === agent && !Object.hasOwn(snapshot.completedTasks, t.id) && t.dependsOn.every(id => Object.hasOwn(snapshot.completedTasks, id))) : undefined;
       const joining = initial && this.ids().length > 1 && snapshot.messages.some(message => this.ids().includes(message.from));
       const delivery = buildContextDelivery(snapshot, agent, memory);
       this.state.session.contextCursors ??= {};
       this.state.session.contextCursors[agent] = delivery.cursor;
       this.save();
       const prompt = delivery.prompt + (isCollaborating(snapshot) && initial && this.ids().length > 1 ? joining ? '\nJOINING EXISTING CONVERSATION: review the shared history and contribute your perspective. Do not propose or vote on decisions in this first turn. Yield if no peer response is needed, or finish if the exchange is complete.' : '\nINITIAL INDEPENDENT EXPLORATION: give your own initial thoughts. Do not propose or vote on decisions in this first turn. Yield if no peer response is needed, or finish if the exchange is complete; otherwise you will see your peer’s thoughts next.' : '') + (task && !isCollaborating(snapshot) ? `\nOnly if the user requests implementation, your authorized task is: ${JSON.stringify(task)}. Do not resume pending work merely because a task exists. Do not start sibling tasks.` : task ? `\nYour only active implementation task this turn: ${JSON.stringify(task)}. Do not start sibling tasks. Verify this task, then return complete_task for this id. Do not revise the accepted plan while implementing.` : '');
-      const reply = await this.providers[agent].run({ agent, prompt, ...workspace, sessionId: snapshot.providerSessions[agent], model: snapshot.models?.[agent], effort: snapshot.efforts?.[agent], title: nativeSessionTitle(snapshot, agent), signal: abort.signal }, event => {
+      const reply = await this.providers[agent].run({ agent, prompt, ...workspace, permissions: sessionPermissions(snapshot), sessionId: snapshot.providerSessions[agent], model: snapshot.models?.[agent], effort: snapshot.efforts?.[agent], title: nativeSessionTitle(snapshot, agent), signal: abort.signal }, event => {
         if (ticket !== this.tickets[agent] || abort.signal.aborted) return;
         if (event.type === 'text') { this.state.streams[agent] = (this.state.streams[agent] + event.text).slice(-40_000); this.notify(); }
         else if (event.type === 'activity') this.activity(agent, event.text, 'tool');

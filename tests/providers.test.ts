@@ -40,6 +40,33 @@ readline.createInterface({input:process.stdin}).on('line', line => {
  }
 });`;
 describe('native provider adapters with local protocol fixtures', () => {
+  it('maps project directories, full access and read-only downgrades to Codex turn policies', async () => {
+    const f = await fixture(codexFixture.replace("const m=JSON.parse(line);", "const m=JSON.parse(line); require('node:fs').appendFileSync('requests.jsonl',line+'\\n');"));
+    const provider = new CodexProvider(f.options);
+    await provider.run(turn(f.cwd, { writable: true, permissions: { mode: 'project', additionalDirectories: ['/tmp/extra'] } }), () => {});
+    await provider.run(turn(f.cwd, { writable: true, permissions: { mode: 'full', additionalDirectories: [] } }), () => {});
+    await provider.run(turn(f.cwd, { writable: false, sessionId: 'session-1', permissions: { mode: 'read-only', additionalDirectories: [] } }), () => {});
+    const requests = (await readFile(join(f.cwd, 'requests.jsonl'), 'utf8')).trim().split('\n').map(line => JSON.parse(line));
+    expect(requests.filter(request => request.method === 'turn/start').map(request => request.params.sandboxPolicy)).toEqual([
+      { type: 'workspaceWrite', writableRoots: [f.cwd, '/tmp/extra'], networkAccess: false, excludeTmpdirEnvVar: true, excludeSlashTmp: true },
+      { type: 'dangerFullAccess' }, { type: 'readOnly', networkAccess: false },
+    ]);
+    await provider.dispose();
+  });
+  it('maps Claude full access and additional directories without retaining permissions on downgrade', async () => {
+    const f = await fixture(`require('node:fs').appendFileSync('args.jsonl',JSON.stringify(process.argv.slice(2))+'\\n'); process.stdin.resume(); process.stdin.on('end', () => console.log(JSON.stringify({type:'result',subtype:'success',structured_output:{message:'ok',actions:[]}})));`);
+    const provider = new ClaudeProvider(f.options);
+    for (const mode of ['project', 'full', 'read-only'] as const) await provider.run(turn(f.cwd, { writable: mode !== 'read-only', permissions: { mode, additionalDirectories: ['/tmp/extra'] } }), () => {});
+    const args: string[][] = (await readFile(join(f.cwd, 'args.jsonl'), 'utf8')).trim().split('\n').map(line => JSON.parse(line));
+    const get = (a: string[], key: string) => a[a.indexOf(key) + 1];
+    expect(args.every(a => get(a, '--add-dir') === '/tmp/extra')).toBe(true);
+    expect(args.map(a => get(a, '--permission-mode'))).toEqual(['dontAsk', 'bypassPermissions', 'dontAsk']);
+    expect(args.map(a => get(a, '--tools'))).toEqual(['Read,Glob,Grep,Bash', 'Read,Glob,Grep,Bash,Edit,Write', 'Read,Glob,Grep']);
+    expect(args.map(a => a.includes('--dangerously-skip-permissions'))).toEqual([false, true, false]);
+    expect(JSON.parse(get(args[0], '--settings')).sandbox.filesystem.allowWrite).toEqual(['/tmp/extra']);
+    expect(JSON.parse(get(args[2], '--settings')).sandbox.filesystem.allowWrite).toEqual([]);
+    await provider.dispose();
+  });
   it('discovers Codex models without creating a conversation or running inference', async () => {
     const f = await fixture(codexFixture.replace("const m=JSON.parse(line);", "const m=JSON.parse(line); require('node:fs').appendFileSync('requests.jsonl',line+'\\n');"));
     const provider = new CodexProvider(f.options);

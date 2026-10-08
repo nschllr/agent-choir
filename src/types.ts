@@ -6,6 +6,7 @@ export interface AgentConfig { id: AgentId; provider: ProviderKind; }
 export type Scope = 'discuss' | 'plan' | 'build';
 export type Recipient = AgentId | 'both';
 export type Delivery = 'queued' | 'immediate';
+export interface PermissionSettings { mode: 'read-only' | 'project' | 'full'; additionalDirectories: string[] }
 export interface ModelSettings { model: string | null; effort: string | null }
 export interface ModelOption { id: string; name: string; efforts: string[]; defaultEffort?: string }
 export interface ModelCatalog { models: ModelOption[]; defaultModel?: string; notice?: string }
@@ -54,6 +55,7 @@ export interface Session {
   agents?: AgentConfig[];
   providerModels?: Partial<Record<ProviderKind, string>>;
   providerEfforts?: Partial<Record<ProviderKind, string | null>>;
+  permissions?: PermissionSettings;
   /** Idle composer, distinguished from an explicit user pause. */
   awaitingInput?: boolean;
   /** Chat replies only to addressed user messages; collaboration is explicitly started. */
@@ -65,6 +67,7 @@ export interface Session {
 }
 export interface ProviderTurn {
   agent: AgentId; prompt: string; cwd: string; writable: boolean;
+  permissions?: PermissionSettings;
   sessionId?: string; model?: string | null; effort?: string | null; title?: string; signal: AbortSignal;
 }
 export type ProviderEvent =
@@ -103,6 +106,7 @@ export interface UIController {
   setInitialAgent?(provider: ProviderKind): Promise<void>;
   getModelOptions?(agent: AgentId): Promise<ModelCatalog>;
   setModelSettings?(agent: AgentId, settings: ModelSettings): Promise<void>;
+  setPermissions?(settings: PermissionSettings): Promise<void>;
   resolve(id: string, resolution: string): Promise<void>;
   acceptIntegration?(notes: string): Promise<void>;
   detach?(): Promise<void>;

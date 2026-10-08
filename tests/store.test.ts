@@ -22,6 +22,19 @@ afterEach(() => {
 });
 
 describe('durable session store', () => {
+  it('persists permission controls and native model/effort defaults across reopening', () => {
+    const { store, session } = fixture();
+    session.demo = false; session.scope = 'build';
+    session.permissions = { mode: 'full', additionalDirectories: ['/tmp'] };
+    session.models = { codex: null, claude: 'sonnet[1m]' }; session.efforts = { codex: null, claude: 'high' };
+    store.save(session);
+    expect(store.load(session.id)).toEqual(session);
+    session.scope = 'discuss';
+    expect(() => store.save(session)).toThrow('Invalid session');
+    session.permissions.mode = 'read-only';
+    store.save(session);
+    expect(store.load(session.id)?.permissions.mode).toBe('read-only');
+  });
   it('restores exact snapshots after reopening and lists their metadata', () => {
     const { directory, store, session } = fixture();
     session.providerSessions = { codex: 'native-session' };

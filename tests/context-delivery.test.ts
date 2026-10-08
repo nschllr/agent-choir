@@ -19,6 +19,17 @@ function acknowledge(s: Session, agent = 'one', memory?: PreparedContext) {
 const memory = (files: Record<string, string>): PreparedContext => ({ directory: '/state/context/session/.agent', files, revision: 'unused' });
 
 describe('incremental native context', () => {
+  it('sends changed permissions on a resumed native thread and removes the direct plan prerequisite', () => {
+    const s = fixture();
+    s.demo = false; s.interaction = 'chat'; s.scope = 'build';
+    acknowledge(s);
+    s.permissions = { mode: 'full', additionalDirectories: ['/tmp/shared'] };
+    const next = buildContextDelivery(s, 'one');
+    expect(next.bootstrap).toBe(false);
+    expect(next.prompt).toContain('"mode":"full"');
+    expect(next.prompt).toContain('/tmp/shared');
+    expect(next.prompt).toContain('no plan vote or task assignment is required');
+  });
   it('displays stop messages in both panes while keeping them out of peer context, including recovery', () => {
     const s = fixture(); acknowledge(s, 'two');
     s.messages.push({ id: 'yield', from: 'one', to: 'two', at: '', text: 'VISIBLE_STOP_MESSAGE', delivery: 'display-only' });

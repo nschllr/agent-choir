@@ -62,7 +62,7 @@ account checks have been exercised with the installed native CLIs.
 Live work consumes normal provider usage and remains subject to account eligibility
 and provider limits.
 
-Linux is the supported initial platform. Claude build turns require working
+Linux is the supported initial platform. Claude Project-mode write turns require working
 native Bash sandbox support, including `bwrap` and `socat`; follow the
 [Claude sandbox setup](https://code.claude.com/docs/en/sandboxing). Missing or
 incompatible sandbox support fails the turn instead of allowing an unsandboxed
@@ -70,14 +70,15 @@ fallback. `--doctor` checks binaries without inspecting credentials or calling m
 
 External native tools can escape an ordinary shell sandbox. Agent Duet therefore
 disables Claude hooks/MCP and limits its tools; read-only Claude turns have no Bash,
-Edit, or Write tools. Build writes use sandboxed Bash. Codex uses read-only or
-workspace-write policy and disables ancillary tools. Its adapter refuses an
+Edit, or Write tools. Project-mode writes use sandboxed Bash. Full access enables
+Claude Bash/Edit/Write without the filesystem/network sandbox. Codex uses the
+selected read-only, workspace-write, or full-access policy and disables ancillary tools. Its adapter refuses an
 effective configuration containing enabled MCP servers or configured hooks.
 
 For an isolation error, use a dedicated project/native configuration without
 those integrations and check the effective native configuration for that project.
 Keep unrelated global workflows intact. Configuration overrides must also apply
-to generated worktree paths, since build turns run there. Agent Duet does not
+to generated worktree paths, since collaboration implementation runs there. Agent Duet does not
 rewrite your native configuration. CLI incompatibilities or interactive approval
 requests produce an explicit error; they are not silently approved.
 
@@ -87,11 +88,11 @@ requests produce an explicit error; they are not silently approved.
 request runs before your first message. Press **Ctrl+G** to choose Claude instead
 before chatting. A solo agent answers you and returns to the composer.
 
-The default session supports discussion, planning, and implementation. Edits become
-available only after an accepted plan assigns a ready task to the agent; starting
-the app does not request implementation. Use `--read-only` to enforce inspection
-and conversation without project edits. The header shows **edits enabled** or
-**read-only**. Brainstorming can finish without creating an implementation plan.
+The default session permits direct project editing when you request it, with no
+plan vote or task assignment. Discussion and brainstorming still need no edits.
+Use `--read-only` to prevent edits, or change permissions during the session with
+**Ctrl+L**. The header shows **project edits**, **read-only**, or **full access**.
+Collaboration implementation continues to require an agreed plan and assigned tasks.
 
 Press **Ctrl+N** when you want a peer. The new pane lets you choose **Codex** or
 **Claude** with the arrow keys and Enter; Esc cancels. Adding a pane leaves both
@@ -99,9 +100,9 @@ agents idle until you send a message. Two Codex instances display
 as **Codex 1** and **Codex 2**, with separate
 native conversations and worktrees. **Tab / Shift+Tab** changes the composer target
 between the actual agent names and **both**. A directed message gets one response
-from that instance; **both** starts both agents in parallel, with one response
-from each. You can also message an idle agent while the other is working, and
-continue with whichever answers first. Replies do not wake the other agent.
+from that instance; **both** requests one response from each. Read-only turns run
+in parallel. Write-enabled direct turns run one at a time because they edit the
+same project folder; messages to the second agent remain queued until its turn. Replies do not wake the other agent.
 For example, sending “hi” to Codex leaves Claude idle.
 
 Press **Ctrl+B** to toggle collaboration mode, then write a task and press **Enter**.
@@ -113,8 +114,9 @@ active collaboration. In direct chat, Tab selects one agent or both independentl
 
 `/collaborate` also enables the mode, and `/chat` disables it. For a one-command
 start, `/collaborate <task>` enables collaboration and submits that task.
-Project decisions and tasks remain shared state; their approval requirements
-still apply in direct chat.
+Direct chat edits the original project folder and uses ordinary replies. Formal
+plan votes, task completion, isolated worktrees, and integration belong to collaboration.
+Existing collaboration worktrees are retained when you switch modes.
 
 Agents can return a structured `yield` action when no peer reply is needed.
 The message remains visible in the panes but is not forwarded to the other model.
@@ -141,13 +143,14 @@ node dist/cli.js --project /absolute/path/to/project --peer claude --collaborate
   "Implement user search and verify the result against the existing tests."
 ```
 
-Implementation requires every active agent to explicitly accept the same plan
+Collaborative implementation requires every active agent to explicitly accept the same plan
 version. In explicit collaboration, two agents starting
 together give independent initial thoughts, then exchange messages automatically.
-Ready tasks owned by different agents can run in parallel.
+Ready tasks owned by different agents can run in parallel in Project mode without shared extra directories.
 Without `--collaborate`, a command-line brief goes only to the first agent.
 
-Saved sessions retain their original permissions when resumed. Legacy `--scope
+Saved sessions retain their selected permissions unless you change them with
+`--permissions MODE` on resume or Ctrl+L in the TUI. Legacy `--scope
 discuss|plan|build` arguments are still accepted for existing scripts; new sessions
 normally need no scope flag. A legacy `plan` session retains its agreed-plan
 completion requirement. `--read-only` cannot be combined with `--scope build`.
@@ -195,10 +198,51 @@ For the inexpensive model used in the live smoke test, pin
 `--claude-model claude-haiku-4-5-20251001`. The six-turn real discussion completed
 automatically; see [observed results and remaining checks](docs/testing.md#observed-live-smoke-test--2026-10-06).
 
-Build preparation requires a clean Git repository root with an existing HEAD.
-Preserve your current work by committing or stashing it yourself before starting.
-Agent instances get separate worktrees and branches; Agent Duet does not edit,
-checkout, or commit on your original branch. Worktrees remain available afterward.
+Direct editing works in ordinary folders and dirty repositories and writes to the
+original project; the harness does not auto-commit these edits. Collaborative build
+preparation requires a clean Git repository root with an existing HEAD. Collaboration
+uses separate worktrees and branches, retained afterward, and an integration candidate
+for review. Turns with Full access or shared additional directories are serialized
+during collaborative implementation because they can reach shared files.
+
+## Permission controls
+
+Press **Ctrl+L** or enter `/permissions` to choose session-wide permissions for both peers:
+
+| Mode | Access |
+| --- | --- |
+| Read-only | File inspection; project edits disabled. Claude has no shell tool. |
+| Project (default) | Write in the active project/worktree and explicitly added directories; shell network access disabled. |
+| Full access | Filesystem and shell network access as your user, without the filesystem/network sandbox. |
+
+In the selector, ↑/↓ changes mode, **A** adds a directory, **D** removes the last
+one, Enter saves, and Esc cancels. Additional directories permit native file reads
+and, in Project mode, writes. Relative paths resolve against the original project,
+not a generated worktree. These are write boundaries, not a promise that other
+local files are unreadable; native read policies may allow broader inspection.
+
+Commands are also available:
+
+```text
+/permissions project
+/permissions full
+/permissions read-only
+/permissions add ../shared
+/permissions remove /absolute/path/to/shared
+```
+
+For removal, use the absolute path shown in the selector. Paths may contain spaces;
+use them as-is without shell quotes in slash commands. Saving stops active native
+turns before applying the new permissions and leaves their work queued. Press
+Ctrl+P to resume pending work; an idle chat accepts your next message normally.
+Settings persist through restart and background attachment. Full access is explicit,
+never the default; it does not enable additional hooks, MCP servers, or native subagents.
+
+```sh
+agent-duet --resume SESSION_ID --permissions project
+agent-duet --permissions full
+agent-duet --allow-dir ../shared
+```
 
 ## Terminal controls
 
@@ -222,6 +266,7 @@ is available, the CLI announces headless mode and exits at completion instead.
 | Ctrl+R | Select model and reasoning effort for the focused pane |
 | Ctrl+Y or /copy | Open a frozen, single-column copy view of the focused pane; Esc/Ctrl+Y returns |
 | Mouse wheel | Scroll the pane under the pointer, without changing the recipient |
+| Ctrl+L | Change session permissions and additional directories |
 | Click a pane | Focus it and select its agent for direct messages; collaboration still sends to both |
 | Ctrl+X | Expand or collapse the selected visible code block in the focused pane |
 | Ctrl+K | Select the next expandable code block currently visible in that pane |
@@ -300,18 +345,18 @@ the new version before implementation can begin.
 Missing votes remain pending rather than becoming agreement. Turn/time limits
 checkpoint conversations that stall. In this release, an escalated decision
 pauses the whole session; letting unrelated tasks continue through a decision
-checkpoint is future work. Changing a saved session's permissions requires a new session.
+checkpoint is future work. Permissions can be changed in the current saved session.
 Adding a peer reopens prior agent agreements for the enlarged roster while retaining
 user decisions. Validate an outstanding build integration candidate before adding
 a peer. A peer joining an already validated build triggers fresh agreement and
 validation before that expanded session can declare completion.
 
-Each writable turn receives one active task owned by that agent. The coordinator
+Each collaborative writable turn receives one active task owned by that agent. The coordinator
 rejects completion of a sibling task on that turn. It commits the current owned
 worktree snapshot after task completion; it cannot prove that every changed file
 semantically belongs to that task. Review the resulting diff.
 
-Build completion includes a **manual combined-validation checkpoint**. Finalized
+Collaborative build completion includes a **manual combined-validation checkpoint**. Finalized
 agent commits are merged into a separate integration worktree. Inspect its diff,
 run the project's relevant checks there, then record the actual evidence:
 

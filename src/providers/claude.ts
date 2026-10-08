@@ -29,22 +29,26 @@ export class ClaudeProvider implements AgentProvider {
     const messageStreams = new Map<number, ReadableReplyStream>();
     let nativeError: Error | undefined;
     void result.catch(() => {});
-    // Edit/Write run outside the Bash sandbox. Keep them unavailable even in build
-    // mode: writes must use sandboxed Bash, with fallback explicitly prohibited.
+    const full = turn.writable && turn.permissions?.mode === 'full';
+    const directories = turn.permissions?.additionalDirectories ?? [];
+    // Project writes use sandboxed Bash; full access explicitly permits native file tools.
     const settings = {
       disableAllHooks: true,
-      sandbox: { enabled: turn.writable, failIfUnavailable: true, allowUnsandboxedCommands: false,
+      sandbox: { enabled: turn.writable && !full, failIfUnavailable: true, allowUnsandboxedCommands: false,
         autoAllowBashIfSandboxed: true, excludedCommands: [],
+        filesystem: { allowWrite: turn.writable ? directories : [] },
         network: { allowedDomains: [], allowAllUnixSockets: false, allowLocalBinding: false },
       },
     };
     const args = [...(this.options.prefixArgs ?? []), '-p', '--output-format', 'stream-json', '--verbose',
       '--include-partial-messages', '--json-schema', JSON.stringify(REPLY_SCHEMA),
       '--setting-sources', '', '--settings', JSON.stringify(settings),
-      '--strict-mcp-config', '--mcp-config', '{"mcpServers":{}}', '--disallowedTools', 'mcp__*,Edit,Write,NotebookEdit,Agent',
-      '--tools', turn.writable ? 'Read,Glob,Grep,Bash' : 'Read,Glob,Grep',
-      '--permission-mode', 'dontAsk',
+      '--strict-mcp-config', '--mcp-config', '{"mcpServers":{}}', '--disallowedTools', full ? 'mcp__*,NotebookEdit,Agent' : 'mcp__*,Edit,Write,NotebookEdit,Agent',
+      '--tools', full ? 'Read,Glob,Grep,Bash,Edit,Write' : turn.writable ? 'Read,Glob,Grep,Bash' : 'Read,Glob,Grep',
+      '--permission-mode', full ? 'bypassPermissions' : 'dontAsk',
     ];
+    if (full) args.push('--dangerously-skip-permissions');
+    for (const path of directories) args.push('--add-dir', path);
     if (turn.sessionId) args.push('--resume', turn.sessionId);
     if (turn.model) args.push('--model', turn.model);
     if (turn.model === null) args.push('--model', 'default');

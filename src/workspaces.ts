@@ -1,4 +1,4 @@
-import { agentIds, validAgentId } from './agents.js';
+import { agentIds, isCollaborating, validAgentId } from './agents.js';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { lstat, mkdir, readFile, realpath, rename, writeFile } from 'node:fs/promises';
@@ -133,6 +133,7 @@ export class GitWorkspaceManager implements WorkspaceManager {
   prepare(s: Session, agent: AgentId): Promise<WorkspaceAccess> {
     return this.serial(async () => {
       if (!validAgentId(agent) || !agentIds(s).includes(agent)) throw new Error('Unknown agent');
+      if (!isCollaborating(s)) return { cwd: s.project, writable: s.scope === 'build' && !s.demo };
       const tasks = s.decisions.find(d => d.kind === 'plan')?.tasks ?? [];
       const eligible = tasks.filter(t => t.owner === agent && !Object.hasOwn(s.completedTasks, t.id) && t.dependsOn.every(id => Object.hasOwn(s.completedTasks, id)));
       if (!canImplement(s) || !eligible.length) return { cwd: s.project, writable: false };

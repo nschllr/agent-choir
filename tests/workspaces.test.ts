@@ -28,6 +28,17 @@ async function fixture(tasks?: TaskSpec[]) {
 afterEach(async () => { for (const dir of dirs.splice(0)) await rm(dir, { recursive: true, force: true }); });
 
 describe('isolated build workspaces', () => {
+  it('allows direct project editing without a plan, clean Git state or even a repository', async () => {
+    const f = await fixture();
+    f.s.interaction = 'chat'; f.s.decisions = [];
+    await writeFile(join(f.project, 'dirty.txt'), 'existing user changes');
+    expect(await f.manager.prepare(f.s, 'codex')).toEqual({ cwd: f.project, writable: true });
+    const plain = join(f.root, 'plain'); await mkdir(plain);
+    f.s.project = plain;
+    expect(await f.manager.prepare(f.s, 'codex')).toEqual({ cwd: plain, writable: true });
+    f.s.scope = 'discuss';
+    expect(await f.manager.prepare(f.s, 'codex')).toEqual({ cwd: plain, writable: false });
+  });
   it('returns the original read-only workspace before mutual agreement', async () => {
     const { s, manager, project } = await fixture();
     s.decisions[0].status = 'open';
@@ -168,6 +179,7 @@ it('isolates same-provider instances and integrates their dependency commits', a
     { id: 'a', owner: 'agent-1', description: 'API', dependsOn: [] },
     { id: 'b', owner: 'agent-2', description: 'Client', dependsOn: ['a'] },
   ]);
+  f.s.interaction = 'collaborate';
   f.s.agents = [{ id: 'agent-1', provider: 'codex' }, { id: 'agent-2', provider: 'codex' }];
   const first = await f.manager.prepare(f.s, 'agent-1');
   await writeFile(join(first.cwd, 'api.txt'), 'API');

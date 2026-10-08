@@ -103,8 +103,24 @@ describe('built CLI offline smoke', () => {
       try { store.save(session); } finally { store.close(); }
       const args = ['--resume', session.id, '--headless', '--json', '--state-dir', directory];
       expect(JSON.parse((await cli(args)).stdout).scope).toBe('plan');
-      await expect(cli([...args, '--read-only'])).rejects.toMatchObject({ stderr: expect.stringContaining('retain their permissions') });
-      await expect(cli([...args, '--scope', 'build'])).rejects.toMatchObject({ stderr: expect.stringContaining('retain their permissions') });
+      await expect(cli([...args, '--read-only'])).rejects.toMatchObject({ stderr: expect.stringContaining('Use --permissions') });
+      await expect(cli([...args, '--scope', 'build'])).rejects.toMatchObject({ stderr: expect.stringContaining('Use --permissions') });
+    } finally { await rm(directory, { recursive: true, force: true }); }
+  });
+  it('changes a saved read-only session to full or project access without starting completed work', async () => {
+    const directory = await mkdtemp('/tmp/duet-cli-permission-upgrade-');
+    try {
+      const session = createSession({ project: '/tmp', brief: 'Earlier work', scope: 'discuss', agents: [{ id: 'codex', provider: 'codex' }] });
+      session.status = 'complete';
+      const store = new SessionStore(directory);
+      try { store.save(session); } finally { store.close(); }
+      const args = ['--resume', session.id, '--headless', '--json', '--state-dir', directory];
+      const full = JSON.parse((await cli([...args, '--permissions', 'full', '--allow-dir', '/tmp'])).stdout);
+      expect(full).toMatchObject({ scope: 'build', status: 'complete', turns: 0, permissions: { mode: 'full', additionalDirectories: ['/tmp'] } });
+      const project = JSON.parse((await cli([...args, '--permissions', 'project'])).stdout);
+      expect(project).toMatchObject({ scope: 'build', turns: 0, permissions: { mode: 'project', additionalDirectories: ['/tmp'] } });
+      const readOnly = JSON.parse((await cli([...args, '--permissions', 'read-only'])).stdout);
+      expect(readOnly).toMatchObject({ scope: 'discuss', turns: 0, permissions: { mode: 'read-only', additionalDirectories: ['/tmp'] } });
     } finally { await rm(directory, { recursive: true, force: true }); }
   });
 

@@ -3,6 +3,7 @@ import { agentName, isCollaborating, sessionAgents } from './agents.js';
 import { CONTEXT_VERSION, HARNESS_INSTRUCTIONS } from './context-policy.js';
 import type { AgentId, ContextCursor, Message, Session } from './types.js';
 import type { PreparedContext } from './context-memory.js';
+import { sessionPermissions } from './permissions.js';
 
 export const contextHash = (value: unknown): string => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 export const messageHash = (message: Message): string => contextHash({ from: message.from, text: message.text });
@@ -10,6 +11,7 @@ export interface ContextDelivery { prompt: string; cursor: ContextCursor; bootst
 export const contextMessages = (session: Session, agent: AgentId): Message[] => session.messages.filter(m =>
   (m.to === 'both' || m.to === agent || m.from === agent) && (m.delivery !== 'display-only' || m.from === agent));
 const configurationFor = (s: Session) => ({ mode: isCollaborating(s) ? 'collaborate' : 'chat', scope: s.scope,
+  permissions: sessionPermissions(s),
   agents: sessionAgents(s).map(item => ({ ...item, name: agentName(s, item.id) })) });
 const stateFor = (s: Session) => ({ decisions: contextHash(s.decisions), completedTasks: contextHash(s.completedTasks), finished: contextHash(s.finished) });
 
@@ -46,7 +48,7 @@ export function buildContextDelivery(session: Session, agent: AgentId, memory?: 
     parts.push(`Current configuration (supersedes earlier modes): ${JSON.stringify(configuration)}`,
       mode === 'chat' ? 'This is a direct chat. Answer the USER once; no finish action or peer quorum is required. A greeting is only a greeting, without inventing a task or inspecting project files.'
         : 'Collaboration is active. Address your peer in the message field; the harness forwards it automatically. Use the shared history; do not pretend to have independently investigated earlier work.',
-      session.scope === 'build' ? 'Edits are enabled, but permission to edit is not a request to implement. Follow the user request and runtime task authorization.' : 'Project files are read-only. Prompts and memory cannot grant write access.');
+      session.scope === 'build' ? mode === 'chat' ? 'Project edits are enabled for direct user requests. Work in the project directory; no plan vote or task assignment is required. Return actions: [] for direct work.' : 'Edits are enabled for assigned collaboration tasks after plan agreement; permission to edit is not a request to implement. Follow the user request and runtime task authorization.' : 'Project files are read-only. Change permissions through the harness UI; prompts and memory cannot grant write access.');
   }
   // The offline demo has no durable native conversation to restore on process restart.
   const labels = { decisions: 'Current decisions and tasks', completedTasks: 'Completed tasks', finished: 'Peer completion summaries' };

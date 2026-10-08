@@ -126,7 +126,9 @@ export class CodexProvider implements AgentProvider {
         }
         if ((turn.model === null && !model) || (turn.effort === null && !effort)) throw new Error('Cannot resolve Codex defaults for this model. Select an explicit model and reasoning effort.');
       }
-      const config = { cwd: turn.cwd, model, approvalPolicy: 'never', sandbox: turn.writable ? 'workspace-write' : 'read-only',
+      const full = turn.writable && turn.permissions?.mode === 'full';
+      const roots = [turn.cwd, ...(turn.permissions?.additionalDirectories ?? [])];
+      const config = { cwd: turn.cwd, model, approvalPolicy: 'never', sandbox: full ? 'danger-full-access' : turn.writable ? 'workspace-write' : 'read-only',
         config: { features: Object.fromEntries(DISABLED_FEATURES.map(feature => [feature, false])) } };
       const thread = await request(turn.sessionId ? 'thread/resume' : 'thread/start', turn.sessionId ? { ...config, threadId: turn.sessionId } : config);
       threadId = thread.thread?.id;
@@ -141,8 +143,8 @@ export class CodexProvider implements AgentProvider {
       }
       const started = await request('turn/start', {
         threadId, cwd: turn.cwd, model, effort, approvalPolicy: 'never',
-        sandboxPolicy: turn.writable
-          ? { type: 'workspaceWrite', writableRoots: [turn.cwd], networkAccess: false, excludeTmpdirEnvVar: true, excludeSlashTmp: true }
+        sandboxPolicy: full ? { type: 'dangerFullAccess' } : turn.writable
+          ? { type: 'workspaceWrite', writableRoots: roots, networkAccess: false, excludeTmpdirEnvVar: true, excludeSlashTmp: true }
           : { type: 'readOnly', networkAccess: false },
         input: [{ type: 'text', text: turn.prompt, text_elements: [] }], outputSchema: REPLY_SCHEMA,
       });

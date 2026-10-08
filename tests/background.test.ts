@@ -27,6 +27,7 @@ async function setup(instances = false) {
     setInitialAgent: vi.fn(async provider => { view.session.agents![0]!.provider = provider; notify(); }),
     getModelOptions: vi.fn(async () => ({ models: [{ id: 'model-a', name: 'A', efforts: ['low', 'high'] }] })),
     setModelSettings: vi.fn(async (agent, settings) => { view.session.models = { ...view.session.models, [agent]: settings.model }; view.session.efforts = { ...view.session.efforts, [agent]: settings.effort }; notify(); }),
+    setPermissions: vi.fn(async settings => { view.session.permissions = settings; view.session.scope = settings.mode === 'read-only' ? 'discuss' : 'build'; view.session.status = 'paused'; notify(); }),
     resolve: vi.fn(async () => {}), close: vi.fn(async () => {}),
   };
   const server = await serveController(controller, directory, view.session.id);
@@ -34,6 +35,16 @@ async function setup(instances = false) {
   return { directory, controller, view, server };
 }
 describe('background transport', () => {
+  it('applies permission changes through an attached UI and rejects invalid policies', async () => {
+    const { directory, controller, view } = await setup(true);
+    const client = await connectController(directory, view.session.id);
+    cleanups.push(async () => client.disconnect());
+    await client.setPermissions!({ mode: 'full', additionalDirectories: ['/tmp/shared'] });
+    expect(controller.setPermissions).toHaveBeenCalledOnce();
+    expect(client.getView().session).toMatchObject({ scope: 'build', permissions: { mode: 'full', additionalDirectories: ['/tmp/shared'] }, status: 'paused' });
+    await expect(client.setPermissions!({ mode: 'invalid', additionalDirectories: [] } as any)).rejects.toThrow('invalid arguments');
+    expect(controller.setPermissions).toHaveBeenCalledOnce();
+  });
   it('queries model options and persists per-instance settings through an attached UI', async () => {
     const { directory, controller, view } = await setup(true);
     const client = await connectController(directory, view.session.id);

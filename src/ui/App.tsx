@@ -9,12 +9,14 @@ import { composerLayout, nextCursor, previousCursor } from './composer.js';
 import { containsMouse, type MouseEvents, type MouseEvent, type PaneHandle } from './mouse.js';
 import { CopyView, copySnapshot, type CopySnapshot } from './CopyView.js';
 import { ModelPicker } from './ModelPicker.js';
+import { PermissionPicker } from './PermissionPicker.js';
+import { permissionLabels, permissionModes, sessionPermissions } from '../permissions.js';
 import type { ModelSettings } from '../types.js';
 
 export interface AppProps { controller: UIController; onExit?: () => void; mouse?: MouseEvents }
 const paneColors = ['cyan', 'magenta'] as const;
 const colorFor = (view: ViewState, agent: AgentId) => paneColors[Math.max(0, sessionAgents(view.session).findIndex(item => item.id === agent)) % paneColors.length]!;
-const help = 'Ctrl+R model · Ctrl+Y copy · Ctrl+F pane · PgUp/PgDn scroll · /help';
+const help = 'Ctrl+L permissions · Ctrl+R model · Ctrl+Y copy · Ctrl+F pane · /help';
 
 function StyledRow({ row, agent, view, selected }: { row: TranscriptRow; agent: AgentId; view: ViewState; selected: boolean }) {
   const peer = row.from !== agent && row.from !== 'user' && row.from !== 'system';
@@ -221,10 +223,12 @@ export function App({ controller, onExit, mouse }: AppProps) {
   const [closing, setClosing] = useState<'close' | 'detach' | null>(null);
   const [copy, setCopy] = useState<CopySnapshot | null>(null);
   const [modelAgent, setModelAgent] = useState<AgentId | null>(null);
+  const [permissionsOpen, setPermissionsOpen] = useState(false);
+  const permissions = sessionPermissions(view.session);
   const panes = useRef(new Map<AgentId, PaneHandle>());
   useEffect(() => {
     const receive = (event: MouseEvent) => {
-      if (picker || closing || copy || modelAgent || event.x >= size.width || event.y >= size.height - 1) return;
+      if (picker || closing || copy || modelAgent || permissionsOpen || event.x >= size.width || event.y >= size.height - 1) return;
       for (const [agent, pane] of panes.current) {
         if (!containsMouse(pane.node, event)) continue;
         if (event.action === 'click') {
@@ -236,7 +240,13 @@ export function App({ controller, onExit, mouse }: AppProps) {
     };
     mouse?.on('mouse', receive);
     return () => { mouse?.off('mouse', receive); };
-  }, [mouse, picker, closing, copy, modelAgent, collaboration, controller, size]);
+  }, [mouse, picker, closing, copy, modelAgent, permissionsOpen, collaboration, controller, size]);
+  const savePermissions = async (settings: import('../types.js').PermissionSettings) => {
+    if (!controller.setPermissions) throw new Error('Permission settings are unavailable in this session.');
+    await controller.setPermissions(settings);
+    setPermissionsOpen(false);
+    setNotice('Permissions saved · Ctrl+P resumes pending work; idle chats accept your next message.');
+  };
   const openCopy = () => setCopy(copySnapshot(view.session, focusedAgent, view.streams[focusedAgent] || '', panes.current.get(focusedAgent)?.source()));
   const saveModel = async (agent: AgentId, settings: ModelSettings) => {
     if (!controller.setModelSettings) throw new Error('Model settings are unavailable in this session.');
@@ -302,7 +312,15 @@ export function App({ controller, onExit, mouse }: AppProps) {
     if (!text) return;
     if (text.startsWith('/')) {
       const [command, ...args] = text.split(/\s+/);
-      if (command === '/help') setNotice('Ctrl+R or /model: focused peer model/effort; /effort LEVEL changes reasoning. Ctrl+Y or /copy: frozen single-pane text selection; Esc returns. Wheel scrolls the hovered pane; click focuses and selects a direct recipient. PgUp/PgDn scroll; Home/End oldest/latest; Alt+↑/↓ one line; Ctrl+F scroll pane. Ctrl+X expands/collapses visible code; Ctrl+K selects the next visible code block. Ctrl+B toggles collaboration; Enter submits. /collaborate [TASK] /chat /split [codex|claude] /agent [codex|claude] /pause /resume /to <agent name>|both /steer queued|immediate /resolve ID resolution /accept evidence /detach /quit');
+      if (command === '/help') setNotice('Ctrl+L or /permissions: read-only, project, full access; /permissions add|remove PATH. Ctrl+R or /model: model/effort; /effort LEVEL. Ctrl+Y /copy: text selection; Esc returns. Wheel scrolls; click selects a peer. PgUp/PgDn; Home/End; Alt+↑/↓; Ctrl+F pane; Ctrl+X expand code; Ctrl+K next code. Ctrl+B collaboration. /chat /split /agent /pause /resume /to /steer /resolve /accept /detach /quit');
+      else if (command === '/permissions') {
+        if (!args.length) setPermissionsOpen(true);
+        else if (args.length === 1 && permissionModes.includes(args[0] as typeof permissions.mode)) run(() => savePermissions({ ...permissions, mode: args[0] as typeof permissions.mode }));
+        else if (['add', 'remove'].includes(args[0]) && args.length > 1) {
+          const path = args.slice(1).join(' ');
+          run(() => savePermissions({ ...permissions, additionalDirectories: args[0] === 'add' ? [...permissions.additionalDirectories, path] : permissions.additionalDirectories.filter(directory => directory !== path) }));
+        } else { setNotice('Use /permissions [read-only|project|full], or /permissions add|remove PATH.'); return; }
+      }
       else if (command === '/copy') openCopy();
       else if (command === '/model' || command === '/effort') {
         if (!args.length) setModelAgent(focusedAgent);
@@ -369,7 +387,7 @@ export function App({ controller, onExit, mouse }: AppProps) {
       return;
     }
     if (key.ctrl && input === 'c') { close(); return; }
-    if (modelAgent) return;
+    if (modelAgent || permissionsOpen) return;
     if (picker) {
       if (choosing) return;
       if (key.escape) { setPicker(null); return; }
@@ -382,6 +400,7 @@ export function App({ controller, onExit, mouse }: AppProps) {
     if (key.ctrl && input === 'n') { openPicker('add'); return; }
     if (key.ctrl && input === 'y') { openCopy(); return; }
     if (key.ctrl && input === 'r') { setModelAgent(focusedAgent); return; }
+    if (key.ctrl && input === 'l') { setPermissionsOpen(true); return; }
     if (key.ctrl && input === 'g') { openPicker('initial'); return; }
     if (key.ctrl && input === 'b') {
       selectCollaboration(!collaboration);
@@ -432,11 +451,11 @@ export function App({ controller, onExit, mouse }: AppProps) {
   const reserved = 8 + composerLines + errorLines + (decision ? decision.status === 'waiting_user' ? 7 : 6 : 0) + (integration ? 5 : 0) + (notice ? 1 : 0) + (picker?.mode === 'initial' ? 6 : 0);
   const paneHeight = Math.max(5, Math.floor((size.height - reserved) / (narrow ? paneCount : 1)));
   const minutes = Math.floor(view.session.elapsedMs / 60_000);
-  return <><Box display={copy || modelAgent ? 'none' : 'flex'} flexDirection="column" width={width} height={Math.max(1, size.height - 1)} overflow="hidden">
-    <Box justifyContent="space-between" flexShrink={0}><Text bold wrap="truncate">AGENT DUET <Text dimColor>· {isCollaborating(view.session) ? 'collaborating' : 'chat'} · {view.session.scope === 'build' && !view.session.demo ? 'edits enabled' : 'read-only'}</Text>{view.session.demo && <Text color="yellow"> · OFFLINE DEMO</Text>}</Text><Text color={view.session.status === 'running' ? 'green' : 'yellow'}>{closing === 'close' ? 'pausing and closing' : closing === 'detach' ? 'detaching · work continues' : view.session.awaitingInput ? 'ready' : view.session.status.replace('_', ' ')}</Text></Box>
+  return <><Box display={copy || modelAgent || permissionsOpen ? 'none' : 'flex'} flexDirection="column" width={width} height={Math.max(1, size.height - 1)} overflow="hidden">
+    <Box justifyContent="space-between" flexShrink={0}><Text bold wrap="truncate">AGENT DUET <Text dimColor>· {isCollaborating(view.session) ? 'collaborating' : 'chat'} · {permissionLabels[permissions.mode].toLowerCase()}</Text>{view.session.demo && <Text color="yellow"> · OFFLINE DEMO</Text>}</Text><Text color={view.session.status === 'running' ? 'green' : 'yellow'}>{closing === 'close' ? 'pausing and closing' : closing === 'detach' ? 'detaching · work continues' : view.session.awaitingInput ? 'ready' : view.session.status.replace('_', ' ')}</Text></Box>
     <Text dimColor wrap="truncate">{terminalText(view.session.project)} · {terminalText(view.session.id)} · turns {view.session.turns}/{view.session.maxTurns} · {minutes}/{view.session.maxMinutes} min</Text>
     <Box flexDirection={narrow ? 'column' : 'row'} flexShrink={0}>
-      {roster.map((agent, index) => <AgentPane key={agent.id} agent={agent.id} view={view} width={narrow || paneCount === 1 ? width : index === paneCount - 1 ? width - paneWidth : paneWidth} height={paneHeight} tools={tools} focused={focusedAgent === agent.id} scrolling={!picker && !closing && !copy && !modelAgent} panes={panes.current}/>)}
+      {roster.map((agent, index) => <AgentPane key={agent.id} agent={agent.id} view={view} width={narrow || paneCount === 1 ? width : index === paneCount - 1 ? width - paneWidth : paneWidth} height={paneHeight} tools={tools} focused={focusedAgent === agent.id} scrolling={!picker && !closing && !copy && !modelAgent && !permissionsOpen} panes={panes.current}/>)}
       {picker?.mode === 'add' && <AgentPicker provider={picker.provider} width={narrow ? width : width - paneWidth} height={paneHeight} choosing={choosing}/>}
 
     </Box>
@@ -453,5 +472,6 @@ export function App({ controller, onExit, mouse }: AppProps) {
   </Box>{copy && <CopyView snapshot={copy} width={width} height={Math.max(1, size.height - 1)} mouse={mouse}/>}
   {modelAgent && <ModelPicker controller={controller} agent={modelAgent} name={agentName(view.session, modelAgent)} provider={roster.find(agent => agent.id === modelAgent)!.provider}
     initial={{ model: view.session.models?.[modelAgent] ?? null, effort: view.session.efforts?.[modelAgent] ?? null }} width={width} height={Math.max(5, size.height - 1)}
-    save={settings => saveModel(modelAgent, settings)} cancel={() => setModelAgent(null)}/>}</>;
+    save={settings => saveModel(modelAgent, settings)} cancel={() => setModelAgent(null)}/>}
+  {permissionsOpen && <PermissionPicker initial={permissions} width={width} height={Math.max(5, size.height - 1)} save={savePermissions} cancel={() => setPermissionsOpen(false)}/>}</>;
 }

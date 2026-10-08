@@ -240,6 +240,19 @@ automatic empty-response fallback is covered by the offline regressions.
 
 ## Release boundaries
 
+### Permission controls verification — 2026-10-08
+
+`npm run check` passed all 284 tests. Coverage includes direct edits without a plan
+or clean Git repository, serialized write-enabled direct recipients, permission
+downgrades that stop active turns, saved-session upgrades through the CLI, attached
+UI changes, directory normalization, and native provider policy arguments for
+Read-only, Project, and Full access. The permission picker preserves the draft and
+supports cancel without changing access. Collaboration worktree tests remain green.
+
+A live Haiku attempt to read a temporary sibling directory and write a temporary
+project file stopped at Claude's OAuth-refresh error. No successful real-provider
+write validation is claimed for this change; the native protocol tests are offline.
+
 The first implementation has a manual combined-validation checkpoint. It does
 not automatically run the project's validation commands, assess semantic agreement,
 enforce file-to-task relevance, or allow independent tasks to continue through every

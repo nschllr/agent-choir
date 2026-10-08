@@ -1,4 +1,6 @@
 import { agentIds, validateAgents } from './agents.js';
+import { validPermissions } from './permissions.js';
+import { validEffort, validModel } from './model-settings.js';
 import type { AgentConfig } from './types.js';
 import { randomUUID } from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
@@ -40,8 +42,10 @@ function validate(value: unknown): asserts value is Session {
       if (![cursor.configuration, ...stateHashes, ...Object.values(cursor.messages as Record<string, string>), ...Object.values(cursor.memory as Record<string, string>)].every(hash => typeof hash === 'string' && /^[0-9a-f]{64}$/.test(hash))) return invalid();
     }
   }
-  if (value.providerModels !== undefined && (!isRecord(value.providerModels) || !Object.entries(value.providerModels).every(([provider, model]) => member(provider, ['claude', 'codex']) && typeof model === 'string' && /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$/.test(model)))) return invalid();
-  if (value.models !== undefined && (!isRecord(value.models) || !Object.entries(value.models).every(([agent, model]) => member(agent, agents) && typeof model === 'string' && /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$/.test(model)))) return invalid();
+  if (value.providerModels !== undefined && (!isRecord(value.providerModels) || !Object.entries(value.providerModels).every(([provider, model]) => member(provider, ['claude', 'codex']) && validModel(model)))) return invalid();
+  if (value.models !== undefined && (!isRecord(value.models) || !Object.entries(value.models).every(([agent, model]) => member(agent, agents) && (model === null || validModel(model))))) return invalid();
+  for (const key of ['efforts', 'providerEfforts']) if (value[key] !== undefined && (!isRecord(value[key]) || !Object.entries(value[key]).every(([id, effort]) => member(id, key === 'efforts' ? agents : ['claude', 'codex']) && (effort === null || validEffort(effort))))) return invalid();
+  if (value.permissions !== undefined && (!validPermissions(value.permissions) || (value.permissions.mode === 'read-only') !== (value.scope !== 'build'))) return invalid();
   if (value.awaitingInput !== undefined && typeof value.awaitingInput !== 'boolean') return invalid();
   if (value.error !== undefined && typeof value.error !== 'string') return invalid();
   if (value.integration !== undefined && (!isRecord(value.integration) || !member(value.integration.status, ['pending', 'review', 'conflicts', 'accepted']) ||
