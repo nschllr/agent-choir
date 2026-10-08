@@ -97,9 +97,9 @@ try:
         if sys.argv[4] == "interactive":
             send("hi")
             send("\r")
-            expect("turns 2/30")
+            expect("turns 1/30")  # Each submitted message starts a fresh allowance.
             receive(0.5)
-            assert b"turns 3/30" not in buffer, "Directed greeting must not wake the peer"
+            assert b"turns 2/30" not in buffer, "Directed greeting must not wake the peer"
         send("\t")
         expect("To Codex 2")
         if sys.argv[4] == "interactive":
@@ -107,7 +107,7 @@ try:
             send("\x02")  # Ctrl+B selects collaboration without submitting the draft.
             expect("collaboration ON")
             receive(0.4)
-            assert b"turns 3/30" not in buffer, "Changing mode must not submit the draft"
+            assert b"turns 2/30" not in buffer, "Changing mode must not submit the draft"
             send("\r")  # Enter submits in the selected mode.
             expect("Round complete")
         if sys.argv[4] in ("empty", "read-only"):

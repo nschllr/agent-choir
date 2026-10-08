@@ -44,6 +44,7 @@ function controllerFixture(solo = false): UIController {
     setInitialAgent: vi.fn(async provider => update({ session: { ...state.session, agents: [{ id: provider, provider }] }, recipient: provider })),
     getModelOptions: vi.fn(async () => ({ defaultModel: 'model-a', models: [{ id: 'model-a', name: 'Model A', efforts: ['low', 'high'] }, { id: 'model-b', name: 'Model B', efforts: ['medium'] }] })),
     setModelSettings: vi.fn(async (agent, settings) => update({ session: { ...state.session, models: { ...state.session.models, [agent]: settings.model }, efforts: { ...state.session.efforts, [agent]: settings.effort } } })),
+    setLimits: vi.fn(async limits => update({ session: { ...state.session, ...limits } })),
     setPermissions: vi.fn(async settings => update({ session: { ...state.session, permissions: settings, scope: settings.mode === 'read-only' ? 'discuss' : 'build', status: 'paused' } })),
     setRecipient: vi.fn(to => update({ recipient: to })),
     setDelivery: vi.fn(delivery => update({ delivery })),
@@ -62,6 +63,20 @@ describe('terminal text handling', () => {
 });
 
 describe('terminal collaboration workspace', () => {
+  it('shows and edits limits without sending commands to agents, and displays usage since the last message', async () => {
+    const controller = controllerFixture();
+    controller.getView().session.allowanceStart = { turns: 1, elapsedMs: 0 };
+    const screen = render(<App controller={controller}/>); await settle();
+    expect(screen.lastFrame()).toContain('turns 1/12');
+    const command = async (text: string) => { screen.stdin.write(text); await settle(); screen.stdin.write('\r'); await settle(); };
+    await command('/limits'); expect(screen.lastFrame()).toContain('12 turns, 20 active minutes');
+    await command('/limits turns 50'); expect(controller.setLimits).toHaveBeenLastCalledWith({ maxTurns: 50, maxMinutes: 20 });
+    expect(screen.lastFrame()).toContain('turns 1/50');
+    await command('/limits minutes 2.5'); expect(controller.setLimits).toHaveBeenLastCalledWith({ maxTurns: 50, maxMinutes: 2.5 });
+    await command('/limits turns 0'); expect(screen.lastFrame()).toContain('positive whole number');
+    expect(controller.setLimits).toHaveBeenCalledTimes(2);
+    expect(controller.send).not.toHaveBeenCalled(); expect(controller.collaborate).not.toHaveBeenCalled();
+  });
   it('changes session permissions through the picker without sending or losing a draft', async () => {
     const controller = controllerFixture(true), mouse = new MouseEvents();
     controller.getView().session.demo = false;

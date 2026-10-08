@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { DuetController } from '../src/controller.js';
 import { createSession } from '../src/engine.js';
+import { limitUsage } from '../src/limits.js';
 import { HARNESS_INSTRUCTIONS } from '../src/context-policy.js';
 import type { AgentId, AgentProvider, AgentReply, ProviderEvent, ProviderTurn, Session } from '../src/types.js';
 
@@ -40,6 +41,86 @@ function setup(session?: Session) {
   return { controller, claude, codex, saved, store, workspaces };
 }
 const expectCalls = async (provider: FakeProvider, count: number) => { await vi.waitFor(() => expect(provider.calls).toHaveLength(count), { interval: 5, timeout: 1000 }); };
+
+describe('per-message allowances', () => {
+  it('renews both counters on each collaboration message and explicit exhausted resume, retaining configured limits', async () => {
+    const s = createSession({ project: '/tmp', brief: 'Discuss', scope: 'discuss', maxTurns: 3 });
+    const { controller, claude, codex } = setup(s);
+    for (const p of [claude, codex]) p.automatic = call => call.resolve(emptyReply());
+    await controller.start(); await controller.wait();
+    expect(limitUsage(controller.getView().session).turns).toBe(3);
+    await controller.collaborate('Explore an alternative'); await controller.wait();
+    expect(controller.getView().session).toMatchObject({ turns: 6, maxTurns: 3, maxMinutes: 30, status: 'paused' });
+    expect(limitUsage(controller.getView().session).turns).toBe(3);
+    await controller.start(); await controller.wait();
+    expect(controller.getView().session).toMatchObject({ turns: 9, maxTurns: 3, maxMinutes: 30, status: 'paused' });
+    expect(limitUsage(controller.getView().session).turns).toBe(3);
+  });
+  it('resets a paused direct session on input, ignores empty input, and persists allowance across reconstruction', async () => {
+    const s = createSession({ project: '/tmp', brief: 'Hello', scope: 'discuss', maxTurns: 2, agents: [{ id: 'codex', provider: 'codex' }] });
+    s.turns = 10; s.elapsedMs = 90_000; s.allowanceStart = { turns: 8, elapsedMs: 0 };
+    const { controller, saved, codex } = setup(s);
+    await controller.send('  ', 'codex');
+    expect(limitUsage(controller.getView().session)).toEqual({ turns: 2, elapsedMs: 90_000 });
+    await controller.send('Continue', 'codex');
+    expect(limitUsage(controller.getView().session)).toEqual({ turns: 0, elapsedMs: 0 });
+    expect(codex.calls).toHaveLength(0);
+    await controller.setLimits({ maxTurns: 4, maxMinutes: 2.5 });
+    const restored = setup(saved.at(-1));
+    expect(restored.controller.getView().session).toMatchObject({ turns: 10, elapsedMs: 90_000, maxTurns: 4, maxMinutes: 2.5, status: 'paused' });
+    await restored.controller.start(); await expectCalls(restored.codex, 1);
+    restored.codex.calls[0].resolve(emptyReply()); await restored.controller.wait();
+    expect(limitUsage(restored.controller.getView().session).turns).toBe(1);
+  });
+  it('rearms the active timer on steering, excludes paused time, and preserves time across resume', async () => {
+    vi.useFakeTimers(); vi.setSystemTime(new Date('2026-10-08T12:00:00Z'));
+    const { controller, codex } = setup(createSession({ project: '/tmp', scope: 'discuss', brief: 'Hello', maxMinutes: 1, agents: [{ id: 'codex', provider: 'codex' }] }));
+    try {
+      await controller.start(); await vi.advanceTimersByTimeAsync(40_000);
+      await controller.send('New input', 'codex', 'immediate');
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(controller.getView().session.status).toBe('running'); // Old timer would already have expired.
+      expect(codex.calls).toHaveLength(2);
+      await controller.pause();
+      const before = limitUsage(controller.getView().session).elapsedMs;
+      expect(before).toBe(30_000);
+      await vi.advanceTimersByTimeAsync(120_000);
+      await controller.start(); await vi.advanceTimersByTimeAsync(29_999);
+      expect(controller.getView().session.status).toBe('running');
+      await vi.advanceTimersByTimeAsync(1); await controller.wait();
+      expect(controller.getView().session.status).toBe('paused');
+      expect(limitUsage(controller.getView().session).elapsedMs).toBe(60_000);
+      expect(controller.getView().session.elapsedMs).toBe(100_000);
+    } finally { await controller.close(); vi.useRealTimers(); }
+  });
+  it('applies time limit edits to a running timer without erasing usage', async () => {
+    vi.useFakeTimers(); vi.setSystemTime(new Date('2026-10-08T12:00:00Z'));
+    const { controller, codex } = setup(createSession({ project: '/tmp', scope: 'discuss', brief: 'Hello', maxMinutes: 1, agents: [{ id: 'codex', provider: 'codex' }] }));
+    try {
+      await controller.start(); await vi.advanceTimersByTimeAsync(40_000);
+      await controller.setLimits({ maxTurns: 30, maxMinutes: 2 });
+      expect(limitUsage(controller.getView().session).elapsedMs).toBe(40_000);
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(controller.getView().session.status).toBe('running');
+      await controller.setLimits({ maxTurns: 30, maxMinutes: 1 }); await controller.wait();
+      expect(controller.getView().session.status).toBe('paused');
+      expect(codex.calls[0].turn.signal.aborted).toBe(true);
+      expect(limitUsage(controller.getView().session).elapsedMs).toBe(70_000);
+    } finally { await controller.close(); vi.useRealTimers(); }
+  });
+  it('pauses in-flight parallel work when a reduced turn cap cannot cover its reservations', async () => {
+    const { controller, claude, codex } = setup();
+    await controller.start(); await expectCalls(claude, 1); await expectCalls(codex, 1);
+    await controller.setLimits({ maxTurns: 1, maxMinutes: 30 }); await controller.wait();
+    expect(controller.getView().session).toMatchObject({ status: 'paused', turns: 0, maxTurns: 1 });
+    expect(claude.calls[0].turn.signal.aborted).toBe(true);
+    expect(codex.calls[0].turn.signal.aborted).toBe(true);
+    await expect(controller.setLimits({ maxTurns: 0, maxMinutes: 1 })).rejects.toThrow('positive');
+    await expect(controller.setLimits({ maxTurns: 1.5, maxMinutes: 1 })).rejects.toThrow('positive');
+    await expect(controller.setLimits({ maxTurns: 2, maxMinutes: Infinity })).rejects.toThrow('positive');
+    expect(controller.getView().session.maxTurns).toBe(1);
+  });
+});
 
 describe('session permissions', () => {
   it('upgrades a saved read-only session, resolves extra directories and preserves idle input', async () => {
@@ -573,7 +654,7 @@ describe('autonomous collaboration controller', () => {
     session.messages.push({ id: 'a', at: '', from: 'claude', to: 'codex', text: 'Initial thought' }, { id: 'b', at: '', from: 'codex', to: 'claude', text: 'Peer thought' });
     session.turns = 2;
     session.decisions = [{ id: 'plan', kind: 'plan', title: 'Accepted plan', proposal: 'Implement component', version: 1, rounds: 0, status: 'agreed', tasks: [{ id: 'component', owner: 'claude', description: 'Implement component', dependsOn: [] }], positions: { claude: { position: 'accept', reason: 'Fits scope', version: 1 }, codex: { position: 'accept', reason: 'Fits scope', version: 1 } } }];
-    const { controller, claude, workspaces } = setup(session);
+    const { controller, claude, codex, workspaces } = setup(session);
     let finishFinalization!: (value: string | null) => void;
     const finalize = vi.fn(() => new Promise<string | null>(resolve => { finishFinalization = resolve; }));
     Object.assign(workspaces, { finalize });
@@ -594,7 +675,7 @@ describe('autonomous collaboration controller', () => {
     session.messages.push({ id: 'a', at: '', from: 'claude', to: 'codex', text: 'Initial thought' }, { id: 'b', at: '', from: 'codex', to: 'claude', text: 'Peer thought' });
     session.turns = 2;
     session.decisions = [{ id: 'plan', kind: 'plan', title: 'Accepted plan', proposal: 'Implement component', version: 1, rounds: 0, status: 'agreed', tasks: [{ id: 'component', owner: 'claude', description: 'Implement component', dependsOn: [] }], positions: { claude: { position: 'accept', reason: 'Fits scope', version: 1 }, codex: { position: 'accept', reason: 'Fits scope', version: 1 } } }];
-    const { controller, claude, workspaces } = setup(session);
+    const { controller, claude, codex, workspaces } = setup(session);
     let finishFinalization!: (value: string | null) => void;
     const finalize = vi.fn(() => new Promise<string | null>(resolve => { finishFinalization = resolve; }));
     Object.assign(workspaces, { finalize });
@@ -602,10 +683,13 @@ describe('autonomous collaboration controller', () => {
     claude.calls[0]!.resolve({ message: 'Component done', actions: [{ type: 'complete_task', id: 'component', summary: 'Implemented' }] });
     await vi.waitFor(() => expect(finalize).toHaveBeenCalledOnce(), { interval: 5 });
     await controller.send('Include compatibility notes next', 'both', 'queued');
+    for (const provider of [claude, codex]) provider.automatic = call => call.resolve(emptyReply('Compatibility notes included'));
     finishFinalization(null);
     await controller.wait();
     expect(controller.getView().session.messages.some(message => message.text === 'Include compatibility notes next')).toBe(true);
     expect(controller.getView().session.completedTasks.component).toBe('Implemented');
+    expect(controller.getView().session.turns).toBe(5);
+    expect(limitUsage(controller.getView().session).turns).toBe(3);
   });
 
   it('persists pending integration before merging and requires validation evidence to complete', async () => {

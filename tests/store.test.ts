@@ -22,6 +22,20 @@ afterEach(() => {
 });
 
 describe('durable session store', () => {
+  it('round-trips allowance baselines and rejects baselines beyond lifetime usage', () => {
+    const { store, session } = fixture();
+    session.turns = 12; session.elapsedMs = 90_000;
+    session.allowanceStart = { turns: 10, elapsedMs: 60_000 };
+    session.maxTurns = 5; session.maxMinutes = 2.5;
+    store.save(session);
+    expect(store.load(session.id)).toEqual(session);
+    session.allowanceStart.turns = 13;
+    expect(() => store.save(session)).toThrow('Invalid session');
+    session.allowanceStart = { turns: 10, elapsedMs: 90_001 };
+    expect(() => store.save(session)).toThrow('Invalid session');
+    delete session.allowanceStart; store.save(session); // Legacy snapshots still load.
+    expect(store.load(session.id)?.allowanceStart).toBeUndefined();
+  });
   it('restores integration ownership, exact review revision and binding user decisions', () => {
     const { store, session } = fixture();
     session.integration = { status: 'peer_review', path: '/tmp/candidate', owner: 'claude', reviewer: 'codex', revision: 'a'.repeat(40), rounds: 1, validation: 'Checks passed', userResolution: 'Preserve v1 behavior' };

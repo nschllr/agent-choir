@@ -3,6 +3,8 @@ import { realpath, stat } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { homedir } from 'node:os';
 import { sessionPermissions, validPermissions } from './permissions.js';
+import { limitUsage, validLimits } from './limits.js';
+import type { SessionLimits } from './types.js';
 import { integrationPrompt } from './integration.js';
 import { nativeSessionTitle } from './session-label.js';
 import { claudeEfforts, codexEfforts, fallbackCatalog, validModelSettings } from './model-settings.js';
@@ -169,8 +171,39 @@ export class DuetController implements UIController {
   getView(): ViewState { return structuredClone(this.state); }
   subscribe(listener: () => void): () => void { this.listeners.add(listener); return () => this.listeners.delete(listener); }
   private notify(): void { for (const listener of this.listeners) listener(); }
-  private save(): void {
+  private accountTime(): void {
     if (this.tickAt) { const now = Date.now(); this.state.session.elapsedMs += now - this.tickAt; this.tickAt = now; }
+  }
+  private resetAllowance(): void {
+    this.accountTime();
+    const s = this.state.session;
+    s.allowanceStart = { turns: s.turns, elapsedMs: s.elapsedMs };
+    this.armTimer();
+  }
+  private armTimer(): void {
+    if (this.timer) clearTimeout(this.timer);
+    this.timer = undefined;
+    if (this.state.session.status !== 'running') return;
+    const remaining = this.state.session.maxMinutes * 60_000 - limitUsage(this.state.session).elapsedMs;
+    this.timer = setTimeout(() => {
+      this.accountTime();
+      if (limitUsage(this.state.session).elapsedMs >= this.state.session.maxMinutes * 60_000) {
+        this.stop('Active time limit reached. Send a message or /resume for a fresh allowance; /limits changes limits.');
+      } else this.armTimer();
+    }, Math.min(2_147_483_647, Math.max(1, remaining)));
+  }
+  async setLimits(limits: SessionLimits): Promise<void> {
+    if (this.closed) throw new Error('Session is closed');
+    if (!validLimits(limits)) throw new Error('Use positive limits: whole-number turns and minutes (decimals allowed).');
+    this.accountTime();
+    Object.assign(this.state.session, limits);
+    const s = this.state.session, used = limitUsage(s);
+    if (s.status === 'running' && (used.turns >= s.maxTurns || used.turns + Object.values(this.state.busy).filter(Boolean).length > s.maxTurns || used.elapsedMs >= s.maxMinutes * 60_000)) {
+      this.stop('Updated limit reached. Send a message or /resume for a fresh allowance.');
+    } else { this.armTimer(); this.save(); this.wakeDirect?.(); }
+  }
+  private save(): void {
+    this.accountTime();
     this.state.session.updatedAt = new Date().toISOString(); this.store.save(this.state.session); this.notify();
   }
   private activity(agent: AgentId, text: string, kind: Activity['kind'] = 'status'): void {
@@ -196,10 +229,9 @@ export class DuetController implements UIController {
     const s = this.state.session;
     if (!isCollaborating(s) && !s.pendingRecipients?.length && (!s.integration || s.integration.status === 'accepted')) { s.awaitingInput = true; this.save(); return; }
     // An explicit resume renews an exhausted allowance; never renew automatically.
-    if (s.turns >= s.maxTurns) s.maxTurns += 30;
-    if (s.elapsedMs >= s.maxMinutes * 60_000) s.maxMinutes += 30;
+    if (limitUsage(s).turns >= s.maxTurns || limitUsage(s).elapsedMs >= s.maxMinutes * 60_000) this.resetAllowance();
     s.status = 'running'; delete s.error; this.tickAt = Date.now(); this.save();
-    this.timer = setTimeout(() => { this.stop('Session time limit reached. Resume explicitly to add 30 minutes.'); }, Math.max(1, s.maxMinutes * 60_000 - s.elapsedMs));
+    this.armTimer();
     this.running = this.loop().catch(error => {
       this.state.session.status = 'error'; this.state.session.error = String(error instanceof Error ? error.message : error); this.stop(); this.save();
     }).finally(() => {
@@ -213,6 +245,8 @@ export class DuetController implements UIController {
   /** Used by headless execution and tests without changing interactive start semantics. */
   async wait(): Promise<void> { await this.running; }
   private stop(reason?: string): void {
+    this.accountTime(); this.tickAt = 0;
+    if (this.timer) clearTimeout(this.timer); this.timer = undefined;
     this.state.session.awaitingInput = false;
     if (this.state.session.status === 'running') this.state.session.status = 'paused';
     for (const agent of this.ids()) { this.tickets[agent]++; this.aborts.get(agent)?.abort(); }
@@ -230,7 +264,7 @@ export class DuetController implements UIController {
       await this.pause();
       const s = this.state.session, i = s.integration!;
       s.messages.push({ id: randomUUID(), at: new Date().toISOString(), from: 'user', to: 'both', text: text.trim() });
-      this.inputRevision++;
+      this.inputRevision++; this.resetAllowance();
       if (i.owner && i.status !== 'waiting_user') { i.status = 'resolving'; delete i.revision; }
       this.save();
       if (resume) await this.start();
@@ -244,7 +278,7 @@ export class DuetController implements UIController {
     this.state.session.interaction = 'chat';
     this.state.session.pendingRecipients ??= [];
     if (!this.state.session.brief.trim()) this.state.session.brief = text.trim();
-    this.inputRevision++;
+    this.inputRevision++; this.resetAllowance();
     this.state.session.messages.push({ id: randomUUID(), at: new Date().toISOString(), from: 'user', to, text: text.trim() });
     this.state.session.finished = {};
     if (this.state.session.status === 'complete') this.state.session.status = 'paused';
@@ -276,7 +310,7 @@ export class DuetController implements UIController {
     s.interaction = 'collaborate'; s.pendingRecipients = []; s.finished = {};
     s.brief = text.trim(); s.status = 'paused'; s.awaitingInput = false;
     s.messages.push({ id: randomUUID(), at: new Date().toISOString(), from: 'user', to: 'both', text: text.trim() });
-    this.inputRevision++; this.save();
+    this.inputRevision++; this.resetAllowance(); this.save();
     await this.start();
   }
 
@@ -287,10 +321,11 @@ export class DuetController implements UIController {
       const i = this.state.session.integration!;
       i.status = 'resolving'; i.userResolution = resolution.trim(); i.rounds = 0; delete i.revision;
       this.state.session.status = 'paused';
+      this.resetAllowance();
       this.note(`User resolved integration: ${resolution.trim()}. Resume to implement and review that decision.`);
       return;
     }
-    await this.pause(); this.state.session = resolveDecision(this.state.session, id, resolution); this.save();
+    await this.pause(); this.state.session = resolveDecision(this.state.session, id, resolution); this.resetAllowance(); this.save();
     await this.memory?.prepare(this.state.session);
   }
   async acceptIntegration(notes: string): Promise<void> {
@@ -341,8 +376,8 @@ export class DuetController implements UIController {
         if (this.state.session.integration?.status === 'pending' && (!this.automaticIntegration() || this.state.session.status === 'running')) await this.integrate();
         return;
       }
-      if (s.turns >= s.maxTurns) { this.stop('Turn limit reached. Resume explicitly to add 30 turns.'); break; }
-      const selected = this.selectAgents().slice(0, s.maxTurns - s.turns);
+      if (limitUsage(s).turns >= s.maxTurns) { this.stop('Turn limit reached. Send a message or /resume for a fresh allowance; /limits changes limits.'); break; }
+      const selected = this.selectAgents().slice(0, s.maxTurns - limitUsage(s).turns);
       if (!selected.length) {
         s.status = 'paused'; s.awaitingInput = true;
         const notice = 'No further agent input is pending. Waiting for your next message; unfinished work remains pending.';
@@ -365,11 +400,11 @@ export class DuetController implements UIController {
         if (!active.size && !s.pendingRecipients?.length) {
           s.status = 'paused'; s.awaitingInput = true; this.save(); break;
         }
-        if (!active.size && s.turns >= s.maxTurns) {
-          this.stop('Turn limit reached. Resume explicitly to add 30 turns.'); break;
+        if (!active.size && limitUsage(s).turns >= s.maxTurns) {
+          this.stop('Turn limit reached. Send a message or /resume for a fresh allowance; /limits changes limits.'); break;
         }
         // Reserve a turn for each in-flight request, including results not yet applied.
-        const available = Math.min(Math.max(0, s.maxTurns - s.turns - active.size), s.scope === 'build' && !s.demo ? Math.max(0, 1 - active.size) : Infinity);
+        const available = Math.min(Math.max(0, s.maxTurns - limitUsage(s).turns - active.size), s.scope === 'build' && !s.demo ? Math.max(0, 1 - active.size) : Infinity);
         const ready = (s.pendingRecipients ?? []).filter(agent => !active.has(agent)).slice(0, available);
         for (const agent of ready) {
           active.set(agent, this.runAgent(agent).then(
@@ -391,6 +426,7 @@ export class DuetController implements UIController {
   }
   private async acceptReply(agent: AgentId, result: TurnResult | undefined): Promise<void> {
     if (!result || result.ticket !== this.tickets[agent] || this.state.session.status !== 'running') return;
+    if (limitUsage(this.state.session).turns >= this.state.session.maxTurns) { this.stop('Turn limit reached. Resume explicitly to continue.'); return; }
     try {
       const chat = !isCollaborating(this.state.session);
       // Native resumed conversations may still emit an old finish action.
@@ -399,6 +435,7 @@ export class DuetController implements UIController {
       const updated = applyReply(this.state.session, agent, reply);
       if (reply.actions.some(a => a.type === 'complete_task')) await this.workspaces.finalize?.(updated, agent);
       if (result.ticket !== this.tickets[agent] || this.state.session.status !== 'running') return;
+      if (limitUsage(this.state.session).turns >= this.state.session.maxTurns) { this.stop('Turn limit reached. Resume explicitly to continue.'); return; }
       // Finalization may have awaited Git while the user added instructions.
       this.state.session = applyReply(this.state.session, agent, reply);
       const ownMessage = this.state.session.messages.at(-1);
@@ -458,7 +495,7 @@ export class DuetController implements UIController {
     while (this.state.session.status === 'running') {
       const s = this.state.session, i = s.integration!;
       if (i.status === 'accepted' || i.status === 'waiting_user') return;
-      if (s.turns >= s.maxTurns) { this.stop('Integration turn limit reached. Resume explicitly to continue.'); return; }
+      if (limitUsage(s).turns >= s.maxTurns) { this.stop('Integration turn limit reached. Resume explicitly to continue.'); return; }
       if (i.status === 'resolving' && s.scope !== 'build') { this.stop('Integration requires project edits. Change /permissions, then /resume.'); return; }
       const agent = i.status === 'resolving' ? i.owner! : i.reviewer!;
       const expected = JSON.stringify(i);

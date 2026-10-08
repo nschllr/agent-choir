@@ -424,9 +424,22 @@ The adapters use Codex's supported
 [`--name`](https://code.claude.com/docs/en/cli-reference) option. Unsupported Codex
 title updates produce an activity notice without failing the conversation.
 
-Default allowances are 30 provider turns and 30 minutes of active wall time.
-Set `--max-turns N` and `--max-minutes N`. Explicit resume of an exhausted allowance
-adds 30 turns or 30 minutes; limits are never renewed automatically. These are
+Default allowances are 30 provider turns (shared by both agents) and 30 minutes
+of active wall time **between user messages**. Sending a direct message,
+collaboration message, or decision resolution resets both counters. Agent replies,
+tool calls, and integration phase changes do not reset them. Paused time does not
+count. The header shows usage for the current allowance; lifetime totals remain
+in the saved session.
+
+Use `/limits` to show settings, `/limits turns 50` to change the turn cap, or
+`/limits minutes 15` to change active minutes (decimals allowed). Settings persist
+with the session and apply immediately, including in attached/background sessions.
+Changing a limit preserves current usage; lowering it below that usage pauses
+work. Messages submitted while explicitly paused stay queued until `/resume`.
+Explicit `/resume` of an exhausted allowance renews both counters using your
+configured limits; agents never renew their own allowance.
+
+Startup flags `--max-turns N` and `--max-minutes N` set the same limits. These are
 scheduling limits, not exact token or monetary budgets.
 
 State lives in `$XDG_STATE_HOME/agent-duet`, or

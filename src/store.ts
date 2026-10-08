@@ -29,6 +29,11 @@ function validate(value: unknown): asserts value is Session {
   if (value.pendingRecipients !== undefined && (!Array.isArray(value.pendingRecipients) || !value.pendingRecipients.every(agent => member(agent, agents)) || new Set(value.pendingRecipients).size !== value.pendingRecipients.length)) return invalid();
   if (!member(value.scope, ['discuss', 'plan', 'build']) || !member(value.status, ['paused', 'running', 'waiting_user', 'complete', 'error']) || typeof value.demo !== 'boolean') return invalid();
   for (const key of ['turns', 'maxTurns', 'maxMinutes', 'elapsedMs']) if (typeof value[key] !== 'number' || !Number.isFinite(value[key]) || value[key] < 0) return invalid();
+  if (value.allowanceStart !== undefined) {
+    const start = value.allowanceStart;
+    if (!isRecord(start) || !Number.isSafeInteger(start.turns) || (start.turns as number) < 0 || (start.turns as number) > (value.turns as number) ||
+      typeof start.elapsedMs !== 'number' || !Number.isFinite(start.elapsedMs) || start.elapsedMs < 0 || start.elapsedMs > (value.elapsedMs as number)) return invalid();
+  }
   if (!stringRecord(value.completedTasks) || !stringRecord(value.finished) || !stringRecord(value.providerSessions)) return invalid();
   for (const key of ['finished', 'providerSessions']) if (!Object.keys(value[key] as Record<string, unknown>).every(agent => agents.includes(agent))) return invalid();
   if (value.yieldedInputs !== undefined && (!isRecord(value.yieldedInputs) || !Object.entries(value.yieldedInputs).every(([agent, hash]) => agents.includes(agent) && typeof hash === 'string' && /^[0-9a-f]{64}$/.test(hash)))) return invalid();

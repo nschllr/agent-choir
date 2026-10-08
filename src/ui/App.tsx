@@ -1,3 +1,4 @@
+import { limitUsage, validLimits } from '../limits.js';
 import React, { useEffect, useRef, useState } from 'react';
 import { Box, Text, useApp, useInput, useStdout, type DOMElement } from 'ink';
 import type { AgentId, Decision, ProviderKind, UIController, ViewState } from '../types.js';
@@ -312,7 +313,19 @@ export function App({ controller, onExit, mouse }: AppProps) {
     if (!text) return;
     if (text.startsWith('/')) {
       const [command, ...args] = text.split(/\s+/);
-      if (command === '/help') setNotice('Ctrl+L or /permissions: read-only, project, full access; /permissions add|remove PATH. Ctrl+R or /model: model/effort; /effort LEVEL. Ctrl+Y /copy: text selection; Esc returns. Wheel scrolls; click selects a peer. PgUp/PgDn; Home/End; Alt+↑/↓; Ctrl+F pane; Ctrl+X expand code; Ctrl+K next code. Ctrl+B collaboration. /chat /split /agent /pause /resume /to /steer /resolve /accept /detach /quit');
+      if (command === '/help') setNotice('Ctrl+L or /permissions: read-only, project, full access; /permissions add|remove PATH. Ctrl+R or /model: model/effort; /effort LEVEL. Ctrl+Y /copy: text selection; Esc returns. Wheel scrolls; click selects a peer. PgUp/PgDn; Home/End; Alt+↑/↓; Ctrl+F pane; Ctrl+X expand code; Ctrl+K next code. Ctrl+B collaboration. /limits [turns N|minutes N] · /chat /split /agent /pause /resume /to /steer /resolve /accept /detach /quit');
+      else if (command === '/limits') {
+        if (!args.length) setNotice(`Limits per message: ${view.session.maxTurns} turns, ${view.session.maxMinutes} active minutes. /limits turns N or /limits minutes N. New messages reset both counters.`);
+        else {
+          const limits = { maxTurns: view.session.maxTurns, maxMinutes: view.session.maxMinutes };
+          if (args[0] === 'turns') limits.maxTurns = Number(args[1]); else limits.maxMinutes = Number(args[1]);
+          if (args.length !== 2 || !['turns', 'minutes'].includes(args[0]) || !validLimits(limits)) {
+            setNotice('Use /limits turns N (positive whole number) or /limits minutes N (positive number).'); return;
+          }
+          if (!controller.setLimits) { setNotice('Limit settings are unavailable for this session.'); return; }
+          run(async () => { await controller.setLimits!(limits); setNotice(`Limits: ${limits.maxTurns} turns, ${limits.maxMinutes} active minutes per message. Current usage is preserved; new messages reset it.`); });
+        }
+      }
       else if (command === '/permissions') {
         if (!args.length) setPermissionsOpen(true);
         else if (args.length === 1 && permissionModes.includes(args[0] as typeof permissions.mode)) run(() => savePermissions({ ...permissions, mode: args[0] as typeof permissions.mode }));
@@ -450,10 +463,11 @@ export function App({ controller, onExit, mouse }: AppProps) {
   const errorLines = sessionError ? Math.min(4, Math.ceil((sessionError.length + 7) / width)) : 0;
   const reserved = 8 + composerLines + errorLines + (decision ? decision.status === 'waiting_user' ? 7 : 6 : 0) + (integration ? 5 : 0) + (notice ? 1 : 0) + (picker?.mode === 'initial' ? 6 : 0);
   const paneHeight = Math.max(5, Math.floor((size.height - reserved) / (narrow ? paneCount : 1)));
-  const minutes = Math.floor(view.session.elapsedMs / 60_000);
+  const usage = limitUsage(view.session);
+  const minutes = Math.floor(usage.elapsedMs / 60_000);
   return <><Box display={copy || modelAgent || permissionsOpen ? 'none' : 'flex'} flexDirection="column" width={width} height={Math.max(1, size.height - 1)} overflow="hidden">
     <Box justifyContent="space-between" flexShrink={0}><Text bold wrap="truncate">AGENT DUET <Text dimColor>· {isCollaborating(view.session) ? 'collaborating' : 'chat'} · {permissionLabels[permissions.mode].toLowerCase()}</Text>{view.session.demo && <Text color="yellow"> · OFFLINE DEMO</Text>}</Text><Text color={view.session.status === 'running' ? 'green' : 'yellow'}>{closing === 'close' ? 'pausing and closing' : closing === 'detach' ? 'detaching · work continues' : view.session.awaitingInput ? 'ready' : view.session.status.replace('_', ' ')}</Text></Box>
-    <Text dimColor wrap="truncate">{terminalText(view.session.project)} · {terminalText(view.session.id)} · turns {view.session.turns}/{view.session.maxTurns} · {minutes}/{view.session.maxMinutes} min</Text>
+    <Text dimColor wrap="truncate">{terminalText(view.session.project)} · {terminalText(view.session.id)} · turns {usage.turns}/{view.session.maxTurns} · {minutes}/{view.session.maxMinutes} min</Text>
     <Box flexDirection={narrow ? 'column' : 'row'} flexShrink={0}>
       {roster.map((agent, index) => <AgentPane key={agent.id} agent={agent.id} view={view} width={narrow || paneCount === 1 ? width : index === paneCount - 1 ? width - paneWidth : paneWidth} height={paneHeight} tools={tools} focused={focusedAgent === agent.id} scrolling={!picker && !closing && !copy && !modelAgent && !permissionsOpen} panes={panes.current}/>)}
       {picker?.mode === 'add' && <AgentPicker provider={picker.provider} width={narrow ? width : width - paneWidth} height={paneHeight} choosing={choosing}/>}

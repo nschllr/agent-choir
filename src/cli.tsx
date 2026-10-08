@@ -47,8 +47,8 @@ Options:
   --headless                   Run to completion/checkpoint without terminal UI
   --json                       Headless final snapshot as JSON
   --state-dir PATH             Private local state directory
-  --max-turns N                Session allowance (default 30)
-  --max-minutes N              Active-time allowance (default 30)
+  --max-turns N                Turns per user message (default 30)
+  --max-minutes N              Active minutes per user message (default 30)
   --claude-model MODEL         Claude model alias or ID (saved with session)
   --codex-model MODEL          Codex model ID (saved with session)
   --claude-effort LEVEL        Claude effort (low, medium, high, xhigh, max, default)

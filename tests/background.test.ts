@@ -27,6 +27,7 @@ async function setup(instances = false) {
     setInitialAgent: vi.fn(async provider => { view.session.agents![0]!.provider = provider; notify(); }),
     getModelOptions: vi.fn(async () => ({ models: [{ id: 'model-a', name: 'A', efforts: ['low', 'high'] }] })),
     setModelSettings: vi.fn(async (agent, settings) => { view.session.models = { ...view.session.models, [agent]: settings.model }; view.session.efforts = { ...view.session.efforts, [agent]: settings.effort }; notify(); }),
+    setLimits: vi.fn(async limits => { Object.assign(view.session, limits); notify(); }),
     setPermissions: vi.fn(async settings => { view.session.permissions = settings; view.session.scope = settings.mode === 'read-only' ? 'discuss' : 'build'; view.session.status = 'paused'; notify(); }),
     resolve: vi.fn(async () => {}), close: vi.fn(async () => {}),
   };
@@ -35,6 +36,17 @@ async function setup(instances = false) {
   return { directory, controller, view, server };
 }
 describe('background transport', () => {
+  it('transports limit changes and rejects invalid values before dispatch', async () => {
+    const { directory, controller, view } = await setup();
+    const client = await connectController(directory, view.session.id);
+    cleanups.push(async () => client.disconnect());
+    await client.setLimits!({ maxTurns: 50, maxMinutes: 2.5 });
+    expect(client.getView().session).toMatchObject({ maxTurns: 50, maxMinutes: 2.5 });
+    for (const limits of [{ maxTurns: 0, maxMinutes: 1 }, { maxTurns: 1.5, maxMinutes: 1 }, { maxTurns: 1, maxMinutes: -1 }]) {
+      await expect(client.setLimits!(limits)).rejects.toThrow('invalid arguments');
+    }
+    expect(controller.setLimits).toHaveBeenCalledOnce();
+  });
   it('applies permission changes through an attached UI and rejects invalid policies', async () => {
     const { directory, controller, view } = await setup(true);
     const client = await connectController(directory, view.session.id);

@@ -48,6 +48,7 @@ export interface ContextCursor {
   memory: Record<string, string>;
   inFlight: boolean;
 }
+export interface SessionLimits { maxTurns: number; maxMinutes: number }
 export interface Session {
   id: string; createdAt: string; updatedAt: string; project: string; scope: Scope; brief: string;
   status: 'paused' | 'running' | 'waiting_user' | 'complete' | 'error';
@@ -70,6 +71,8 @@ export interface Session {
   interaction?: 'chat' | 'collaborate';
   pendingRecipients?: AgentId[];
   turns: number; maxTurns: number; maxMinutes: number; elapsedMs: number;
+  /** Lifetime counters at the latest user message or explicit exhausted-budget resume. */
+  allowanceStart?: { turns: number; elapsedMs: number };
   demo: boolean; error?: string;
   integration?: IntegrationState;
 }
@@ -115,6 +118,7 @@ export interface UIController {
   getModelOptions?(agent: AgentId): Promise<ModelCatalog>;
   setModelSettings?(agent: AgentId, settings: ModelSettings): Promise<void>;
   setPermissions?(settings: PermissionSettings): Promise<void>;
+  setLimits?(limits: SessionLimits): Promise<void>;
   resolve(id: string, resolution: string): Promise<void>;
   acceptIntegration?(notes: string): Promise<void>;
   detach?(): Promise<void>;

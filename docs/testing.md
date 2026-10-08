@@ -270,3 +270,13 @@ state and records reported evidence; it does not independently prove semantic
 correctness, test coverage, or file-to-task relevance. Independent tasks still pause
 at escalated decisions. Further real-provider evaluation is needed.
 Passing the offline suite does not mark that production roadmap complete.
+
+### Per-message limits verification — 2026-10-08
+
+`npm run check` passed all 303 tests across 19 files. Regression coverage includes
+allowance resets on new input, steering before the old timer expires, paused-time
+exclusion, explicit exhausted-budget resume using configured values, saved allowance
+baselines, running limit changes, parallel turn reservations, slash-command parsing,
+and attached UI transport validation. The PTY smoke exercises the visible per-message
+turn counter. Tests use scripted providers and controlled clocks; no live model call
+is needed to verify the harness-owned limits.
