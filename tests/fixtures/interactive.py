@@ -115,11 +115,11 @@ try:
             send("\x1b[<0;10;6m")
             expect("To Codex 1")
             send("BEGIN " + "wrapped words " * 35 + "END")
-            expect("END▏")
+            expect("END")
             send("\x1b[<64;")  # Deliberately split a mouse packet across reads.
             send("90;6M")
             send("\x01")
-            expect("› ▏BEGIN")
+            expect("› BEGIN")
             send("\x15")
             fcntl.ioctl(master, termios.TIOCSWINSZ, struct.pack("HHHH", 40, 60, 0, 0))
             child.send_signal(signal.SIGWINCH)

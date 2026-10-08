@@ -42,7 +42,7 @@ function useView(controller: UIController): ViewState {
   return view;
 }
 
-function AgentPane({ agent, view, width, height, tools, focused, scrolling, panes }: {
+const AgentPane = React.memo(function AgentPane({ agent, view, width, height, tools, focused, scrolling, panes }: {
   agent: AgentId; view: ViewState; width: number; height: number; tools: boolean; focused: boolean; scrolling: boolean;
   panes: Map<AgentId, PaneHandle>;
 }) {
@@ -158,7 +158,7 @@ function AgentPane({ agent, view, width, height, tools, focused, scrolling, pane
       <Text dimColor>{tailLines(activity.map(item => `${item.kind} › ${item.text}`).join('\n') || 'No tool activity yet.', width - 4, toolRows - 1)}</Text>
     </Box>}
   </Box>;
-}
+});
 
 function DecisionCard({ decision, width, view }: { decision: Decision; width: number; view: ViewState }) {
   const position = (agent: AgentId) => {
@@ -199,8 +199,15 @@ export function App({ controller, onExit, mouse }: AppProps) {
   const { exit } = useApp();
   const { stdout } = useStdout();
   const [size, setSize] = useState({ width: stdout.columns || 100, height: stdout.rows || 32 });
-  const [draft, setDraft] = useState('');
-  const [cursor, setCursor] = useState(0);
+  const [editor, setEditor] = useState({ draft: '', cursor: 0 });
+  const editorRef = useRef(editor);
+  const { draft, cursor } = editor;
+  // Input can arrive several times before React commits a frame. Text and caret
+  // must advance together immediately, including when Enter follows a burst.
+  const edit = (update: (current: typeof editor) => typeof editor) => {
+    editorRef.current = update(editorRef.current);
+    setEditor(editorRef.current);
+  };
   const [tools, setTools] = useState(false);
   const [scrollAgent, setScrollAgent] = useState(() => sessionAgents(view.session)[0]!.id);
   const [notice, setNotice] = useState('');
@@ -291,7 +298,7 @@ export function App({ controller, onExit, mouse }: AppProps) {
     return true;
   };
   const submit = () => {
-    const text = draft.trim();
+    const text = editorRef.current.draft.trim();
     if (!text) return;
     if (text.startsWith('/')) {
       const [command, ...args] = text.split(/\s+/);
@@ -349,12 +356,11 @@ export function App({ controller, onExit, mouse }: AppProps) {
         if (continueConversation) await controller.start();
       });
     }
-    setDraft(''); setCursor(0);
+    edit(() => ({ draft: '', cursor: 0 }));
   };
   const insert = (text: string) => {
     const clean = terminalText(text);
-    setDraft(current => current.slice(0, cursor) + clean + current.slice(cursor));
-    setCursor(current => current + clean.length);
+    edit(({ draft, cursor }) => ({ draft: draft.slice(0, cursor) + clean + draft.slice(cursor), cursor: cursor + clean.length }));
   };
   useInput((input, key) => {
     if (closing) return;
@@ -398,14 +404,17 @@ export function App({ controller, onExit, mouse }: AppProps) {
     }
     if ((key.return && key.meta) || (key.ctrl && input === 'j') || input === '\n') { insert('\n'); return; }
     if (key.return) { submit(); return; }
-    if (key.leftArrow) { setCursor(value => previousCursor(draft, value)); return; }
-    if (key.rightArrow) { setCursor(value => nextCursor(draft, value)); return; }
-    if (key.ctrl && input === 'a') { setCursor(0); return; }
-    if (key.ctrl && input === 'e') { setCursor(draft.length); return; }
-    if (key.ctrl && input === 'u') { setDraft(''); setCursor(0); return; }
+    if (key.leftArrow) { edit(current => ({ ...current, cursor: previousCursor(current.draft, current.cursor) })); return; }
+    if (key.rightArrow) { edit(current => ({ ...current, cursor: nextCursor(current.draft, current.cursor) })); return; }
+    if (key.ctrl && input === 'a') { edit(current => ({ ...current, cursor: 0 })); return; }
+    if (key.ctrl && input === 'e') { edit(current => ({ ...current, cursor: current.draft.length })); return; }
+    if (key.ctrl && input === 'u') { edit(() => ({ draft: '', cursor: 0 })); return; }
     if (key.backspace || key.delete) {
       // Terminals often report Backspace as Delete; both erase the previous character.
-      if (cursor > 0) { const previous = previousCursor(draft, cursor); setDraft(value => value.slice(0, previous) + value.slice(cursor)); setCursor(previous); }
+      edit(current => {
+        const previous = previousCursor(current.draft, current.cursor);
+        return { draft: current.draft.slice(0, previous) + current.draft.slice(current.cursor), cursor: previous };
+      });
       return;
     }
     if (!key.ctrl && !key.meta && !key.escape && input) insert(input);
@@ -418,7 +427,9 @@ export function App({ controller, onExit, mouse }: AppProps) {
   const composer = composerLayout(draft, cursor, width - 4);
   const composerLines = composer.count;
   const integration = view.session.integration;
-  const reserved = 8 + composerLines + (decision ? decision.status === 'waiting_user' ? 7 : 6 : 0) + (integration ? 5 : 0) + (notice ? 1 : 0) + (picker?.mode === 'initial' ? 6 : 0);
+  const sessionError = view.session.error ? terminalText(view.session.error).replace(/\n/g, ' ') : '';
+  const errorLines = sessionError ? Math.min(4, Math.ceil((sessionError.length + 7) / width)) : 0;
+  const reserved = 8 + composerLines + errorLines + (decision ? decision.status === 'waiting_user' ? 7 : 6 : 0) + (integration ? 5 : 0) + (notice ? 1 : 0) + (picker?.mode === 'initial' ? 6 : 0);
   const paneHeight = Math.max(5, Math.floor((size.height - reserved) / (narrow ? paneCount : 1)));
   const minutes = Math.floor(view.session.elapsedMs / 60_000);
   return <><Box display={copy || modelAgent ? 'none' : 'flex'} flexDirection="column" width={width} height={Math.max(1, size.height - 1)} overflow="hidden">
@@ -432,9 +443,10 @@ export function App({ controller, onExit, mouse }: AppProps) {
     {picker?.mode === 'initial' && <AgentPicker provider={picker.provider} width={width} choosing={choosing}/>}
     {decision && <DecisionCard decision={decision} width={width} view={view}/>}
     {integration && <IntegrationCard integration={integration}/>}
+    {sessionError && <Box height={errorLines} flexShrink={0} overflow="hidden"><Text color="red">Error: {sessionError}</Text></Box>}
     <Box flexDirection="column" borderStyle="round" borderColor="gray" paddingX={1} flexShrink={0}>
       <Text dimColor wrap="truncate">{collaboration ? <>With <Text bold>{roster.map(agent => agentName(view.session, agent.id)).join(' + ')}</Text> · collaboration ON · Enter submits to both</> : <>To <Text bold color={view.recipient === 'both' ? 'white' : colorFor(view, view.recipient)}>{view.recipient === 'both' ? 'both' : agentName(view.session, view.recipient)}</Text> · direct chat · {view.delivery === 'queued' ? 'wait until tool boundary' : 'steer immediately'}</> }</Text>
-      <Text wrap="truncate">{composer.text}</Text>
+      <Text wrap="truncate">{composer.before}<Text inverse>{composer.caret}</Text>{composer.after}</Text>
     </Box>
     {notice && <Text color="yellow" wrap="truncate">{notice}</Text>}
     <Text dimColor wrap="truncate">{view.session.status === 'complete' ? 'Round complete · send a follow-up to continue · /quit or Ctrl+C exits' : help}</Text>

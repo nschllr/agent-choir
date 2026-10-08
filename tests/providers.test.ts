@@ -109,6 +109,23 @@ describe('native provider adapters with local protocol fixtures', () => {
     const provider = new ClaudeProvider(f.options);
     expect((await provider.run(turn(f.cwd, { agent: 'claude', writable: true }), () => {})).message).toBe('safe'); await provider.dispose();
   });
+  it.each(['result', 'assistant'])('explains Claude OAuth refresh failures from %s diagnostics even with a success subtype', async source => {
+    const diagnostic = 'Failed to refresh OAuth token: another Claude Code process is refreshing it or exited mid-refresh.';
+    const messages = source === 'assistant'
+      ? [{ type: 'assistant', isApiErrorMessage: true, error: 'server_error', message: { content: [{ type: 'text', text: diagnostic }] } }, { type: 'result', subtype: 'success', is_error: true, result: '' }]
+      : [{ type: 'result', subtype: 'success', is_error: true, result: diagnostic }];
+    const f = await fixture(`process.stdin.resume(); process.stdin.on('end', () => { for (const message of ${JSON.stringify(messages)}) console.log(JSON.stringify(message)); });`);
+    const provider = new ClaudeProvider(f.options), events: ProviderEvent[] = [];
+    await expect(provider.run(turn(f.cwd), event => events.push(event))).rejects.toThrow('Claude could not refresh its subscription login');
+    expect(events.some(event => event.type === 'reply')).toBe(false);
+    await provider.dispose();
+  });
+  it('does not expose arbitrary native failure output or label failures as success', async () => {
+    const f = await fixture(`process.stdin.resume(); process.stdin.on('end', () => console.log(JSON.stringify({ type: 'result', subtype: 'success', is_error: true, result: 'private native diagnostic' })));`);
+    const provider = new ClaudeProvider(f.options);
+    await expect(provider.run(turn(f.cwd), () => {})).rejects.toThrow('Claude turn failed. Check native login');
+    await provider.dispose();
+  });
   it('rejects malformed model actions instead of emitting a trusted reply', async () => {
     const f = await fixture(`process.stdin.resume();process.stdin.on('end',()=>console.log(JSON.stringify({type:'result',subtype:'success',structured_output:{message:'bad',actions:[{type:'execute',command:'unsafe'}]}})));`);
     const events: ProviderEvent[] = []; const provider = new ClaudeProvider(f.options);

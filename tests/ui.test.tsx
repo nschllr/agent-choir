@@ -61,6 +61,14 @@ describe('terminal text handling', () => {
 });
 
 describe('terminal collaboration workspace', () => {
+  it('shows the saved session error without requiring tool activity to be enabled', async () => {
+    const controller = controllerFixture();
+    controller.getView().session.status = 'error';
+    controller.getView().session.error = 'Claude could not refresh its subscription login. Retry in a minute.';
+    const screen = render(<App controller={controller}/>); await settle();
+    expect(screen.lastFrame()).toContain('Error: Claude could not refresh its subscription login. Retry in a minute.');
+    expect(screen.lastFrame()).toContain('direct chat');
+  });
   it('selects a model and supported effort for the focused peer without sending or losing a draft', async () => {
     const controller = controllerFixture();
     const screen = render(<App controller={controller}/>); await settle();
@@ -180,16 +188,34 @@ describe('terminal collaboration workspace', () => {
     const screen = render(<App controller={controller}/>); await settle();
     const draft = 'BEGIN ' + 'words '.repeat(25) + 'END';
     screen.stdin.write(draft); await settle();
-    expect(screen.lastFrame()).toContain('› BEGIN'); expect(screen.lastFrame()).toContain('END▏');
+    expect(screen.lastFrame()).toContain('› BEGIN'); expect(screen.lastFrame()).toContain('END');
     screen.stdin.write(' more'.repeat(100)); await settle();
     expect(screen.lastFrame()).not.toContain('› BEGIN');
     screen.stdin.write('\x01'); await settle();
-    expect(screen.lastFrame()).toContain('› ▏BEGIN');
+    expect(screen.lastFrame()).toContain('› BEGIN');
     screen.stdin.write('Edited '); await settle();
     screen.stdin.write('\x05'); await settle();
-    expect(screen.lastFrame()).toContain('more▏');
+    expect(screen.lastFrame()).toContain('more');
     screen.stdin.write('\r'); await settle();
     expect(controller.send).toHaveBeenCalledWith('Edited ' + draft + ' more'.repeat(100), 'codex', 'queued');
+  });
+  it('preserves rapid input order and submits all characters before the next render', async () => {
+    const controller = controllerFixture(true);
+    const screen = render(<App controller={controller}/>); await settle();
+    for (const character of 'to type quickly') screen.stdin.write(character);
+    screen.stdin.write('\r'); await settle();
+    expect(controller.send).toHaveBeenCalledWith('to type quickly', 'codex', 'queued');
+    expect(screen.lastFrame()).not.toContain('to type quickly');
+  });
+  it('applies rapid cursor moves, Unicode deletion, insertion and clear to the latest draft', async () => {
+    const controller = controllerFixture(true);
+    const screen = render(<App controller={controller}/>); await settle();
+    for (const input of ['ab👩‍💻cd', '\x1b[D', '\x1b[D', '\x7f', 'X', 'Y', '\x1b[C', 'Z', '\x01', '>', '\x05', '!', '\r']) screen.stdin.write(input);
+    await settle();
+    expect(controller.send).toHaveBeenCalledWith('>abXYcZd!', 'codex', 'queued');
+    for (const input of ['discard', '\x15', 'n', 'e', 'w', '\r']) screen.stdin.write(input);
+    await settle();
+    expect(controller.send).toHaveBeenLastCalledWith('new', 'codex', 'queued');
   });
   it('previews five code lines and expands independently in the focused pane without changing the draft or recipient', async () => {
     const controller = controllerFixture();

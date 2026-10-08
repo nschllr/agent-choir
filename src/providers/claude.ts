@@ -5,6 +5,15 @@ import { ReadableReplyStream } from './reply-stream.js';
 import { requireClaudeSubscription } from './subscription.js';
 import { fallbackCatalog } from '../model-settings.js';
 
+function claudeFailure(details: unknown[], subtype: unknown): Error {
+  const text = details.filter((value): value is string => typeof value === 'string').join('\n');
+  // Classify native diagnostics without persisting arbitrary output or credentials.
+  if (/Failed to refresh OAuth token/i.test(text)) return new Error(
+    'Claude could not refresh its subscription login. Another Claude Code process may be refreshing it or may have exited mid-refresh. Retry in a minute; if it persists, close other Claude Code processes and run claude auth login.');
+  const reason = typeof subtype === 'string' && /^error_[a-z_]+$/.test(subtype) ? ` (${subtype})` : '';
+  return new Error(`Claude turn failed${reason}. Check native login, sandbox availability, and CLI compatibility.`);
+}
+
 /** Stream-json print mode of the unmodified Claude Code CLI; no credential handling. */
 export class ClaudeProvider implements AgentProvider {
   readonly id = 'claude' as const;
@@ -18,6 +27,7 @@ export class ClaudeProvider implements AgentProvider {
     let resolveReply!: (reply: AgentReply) => void, rejectReply!: (error: Error) => void;
     const result = new Promise<AgentReply>((resolve, reject) => { resolveReply = resolve; rejectReply = reject; });
     const messageStreams = new Map<number, ReadableReplyStream>();
+    let nativeError: Error | undefined;
     void result.catch(() => {});
     // Edit/Write run outside the Bash sandbox. Keep them unavailable even in build
     // mode: writes must use sandboxed Bash, with fallback explicitly prohibited.
@@ -45,6 +55,10 @@ export class ClaudeProvider implements AgentProvider {
       if (message.type === 'system' && message.subtype === 'init' && typeof message.model === 'string') {
         emit({ type: 'activity', text: `Claude model: ${message.model}` });
       }
+      if (message.type === 'assistant' && message.isApiErrorMessage === true) {
+        const content = message.message?.content;
+        nativeError = claudeFailure(Array.isArray(content) ? content.map((block: any) => block?.text) : [], message.error);
+      }
       if (message.type === 'stream_event') {
         const event = message.event;
         if (event?.type === 'content_block_delta' && event.delta?.type === 'text_delta') {
@@ -60,7 +74,7 @@ export class ClaudeProvider implements AgentProvider {
       if (message.type === 'user' && message.message?.content?.some((block: any) => block.type === 'tool_result')) emit({ type: 'tool_boundary' });
       if (message.type === 'result') {
         if (message.is_error || message.subtype !== 'success') {
-          rejectReply(new Error(`Claude turn failed (${String(message.subtype ?? 'native error')}). Check native login, sandbox availability, and CLI compatibility.`)); return;
+          rejectReply(nativeError ?? claudeFailure([message.result, ...(Array.isArray(message.errors) ? message.errors : [])], message.subtype)); return;
         }
         try {
           const data = message.structured_output ?? JSON.parse(message.result);
