@@ -1,25 +1,32 @@
 import { agentIds, isCollaborating, validAgentId } from './agents.js';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { lstat, mkdir, readFile, realpath, rename, writeFile } from 'node:fs/promises';
-import { join, resolve } from 'node:path';
+import { lstat, mkdir, mkdtemp, readFile, readdir, realpath, rename, rm, writeFile } from 'node:fs/promises';
+import { join, relative, resolve, sep } from 'node:path';
 import { canImplement } from './engine.js';
 import { type AgentId, type Session, type WorkspaceAccess, type WorkspaceManager, type IntegrationCandidate } from './types.js';
 
 const exec = promisify(execFile);
 interface BranchState { path: string; branch: string; completed: string[]; finalizedCommit?: string; }
 interface WorkspaceState { project: string; base: string; agents: Partial<Record<AgentId, BranchState>>; integration?: BranchState; }
-const git = async (cwd: string, ...args: string[]): Promise<string> => {
+const runGit = async (cwd: string, args: string[], options: { index?: string; raw?: boolean } = {}): Promise<string> => {
   try {
-    const env = { ...process.env, GIT_TERMINAL_PROMPT: '0' };
+    const env: NodeJS.ProcessEnv = { ...process.env, GIT_TERMINAL_PROMPT: '0', GIT_OPTIONAL_LOCKS: '0' };
     for (const key of ['GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE', 'GIT_COMMON_DIR', 'GIT_OBJECT_DIRECTORY', 'GIT_ALTERNATE_OBJECT_DIRECTORIES']) delete (env as NodeJS.ProcessEnv)[key];
+    if (options.index) env.GIT_INDEX_FILE = options.index;
     const result = await exec('git', ['-c', 'user.name=Agent Duet', '-c', 'user.email=agent-duet@localhost', '-c', 'core.hooksPath=/dev/null', '-c', 'commit.gpgSign=false', ...args], { cwd, maxBuffer: 8 * 1024 * 1024, env });
-    return result.stdout.trim();
+    return options.raw ? result.stdout : result.stdout.trim();
   } catch (error) {
     const e = error as { stderr?: string; message?: string };
     throw new Error(`Git ${args[0]} failed: ${e.stderr?.trim() || e.message}`, { cause: error });
   }
 };
+const git = (cwd: string, ...args: string[]): Promise<string> => runGit(cwd, args);
+
+function inside(parent: string, path: string): string | undefined {
+  const name = relative(parent, path);
+  return name !== '..' && !name.startsWith(`..${sep}`) && !name.startsWith(sep) ? name : undefined;
+}
 
 /** Worktrees are retained for inspection. No operation checks out or commits on the user's branch. */
 export class GitWorkspaceManager implements WorkspaceManager {
@@ -57,6 +64,86 @@ export class GitWorkspaceManager implements WorkspaceManager {
     await writeFile(temporary, JSON.stringify(state, null, 2), { mode: 0o600 });
     await rename(temporary, join(dir, 'workspace.json'));
   }
+  private async snapshot(s: Session, project: string, head: string): Promise<string> {
+    // Keep the baseline reachable even if the process dies before workspace.json
+    // is saved. A retry must not capture a different version of the user's files.
+    const ref = `refs/duet/${s.id}/base`;
+    let previous: string | undefined;
+    try { previous = await git(project, 'rev-parse', '--verify', `${ref}^{commit}`); } catch { /* First preparation. */ }
+    if (previous) return previous;
+    if (await git(project, 'ls-files', '--unmerged')) throw new Error('Resolve existing Git merge conflicts before starting collaborative implementation');
+
+    await mkdir(this.stateDir, { recursive: true });
+    const exclusions = [...new Set([resolve(this.stateDir), await realpath(this.stateDir)]
+      .map(path => inside(project, path)).filter((path): path is string => path !== undefined))];
+    if (exclusions.includes('')) throw new Error('Choose a state directory separate from the project root');
+    const excluded = (path: string) => exclusions.some(name => path === name || path.startsWith(`${name}/`));
+    const temporary = await mkdtemp(join(await realpath(this.stateDir), 'snapshot-'));
+    const index = join(temporary, 'index');
+    const indexed = (...args: string[]) => runGit(project, args, { index });
+    try {
+      // A fresh index avoids copying skip-worktree/assume-unchanged flags or a
+      // split index. No command stages, stashes, or checks out the original tree.
+      await indexed('read-tree', head);
+      const original = new Set((await runGit(project, ['ls-files', '--cached', '-z'], { raw: true })).split('\0').filter(Boolean));
+      const baseline = new Set((await runGit(project, ['ls-files', '--cached', '-z'], { index, raw: true })).split('\0').filter(Boolean));
+      // Respect files removed from tracking. In particular, a now-ignored local
+      // file must not be reintroduced just because it existed in HEAD.
+      const removed = [...baseline].filter(path => !original.has(path));
+      if (removed.length) {
+        const paths = join(temporary, 'removed-paths');
+        await writeFile(paths, `${removed.map(path => `:(literal)${path}`).join('\0')}\0`, { mode: 0o600 });
+        await indexed('rm', '--cached', `--pathspec-from-file=${paths}`, '--pathspec-file-nul');
+      }
+      const additions: string[] = [];
+      for (const path of original) {
+        if (baseline.has(path) || excluded(path)) continue;
+        try {
+          const stat = await lstat(join(project, path));
+          if (stat.isFile() || stat.isSymbolicLink()) additions.push(`:(literal)${path}`);
+        } catch (error) {
+          if (!['ENOENT', 'ENOTDIR'].includes((error as NodeJS.ErrnoException).code ?? '')) throw error;
+        }
+      }
+      // Explicitly staged new files can be ignored by .gitignore. Include their
+      // current contents while ordinary untracked ignored files remain excluded.
+      if (additions.length) {
+        const paths = join(temporary, 'tracked-paths');
+        await writeFile(paths, `${additions.join('\0')}\0`, { mode: 0o600 });
+        await indexed('add', '--force', `--pathspec-from-file=${paths}`, '--pathspec-file-nul');
+      }
+      await indexed('add', '--all', '--', '.', ...exclusions.map(name => `:(exclude,literal)${name}`));
+      for (const name of exclusions) await indexed('rm', '-r', '--cached', '--ignore-unmatch', '--', `:(literal)${name}`);
+      // Gitlinks record commit IDs, not nested working files. Inspect the actual
+      // candidate so this also catches newly added embedded repositories.
+      const entries = (await runGit(project, ['ls-files', '--stage', '-z'], { index, raw: true })).split('\0');
+      for (const entry of entries.filter(entry => entry.startsWith('160000 '))) {
+        const path = join(project, entry.slice(entry.indexOf('\t') + 1));
+        try {
+          if (!(await lstat(path)).isDirectory()) continue;
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code === 'ENOENT') continue;
+          throw error;
+        }
+        // Only empty uninitialized submodules can be represented by their saved
+        // gitlink without silently losing local files from the snapshot.
+        if (await realpath(await git(path, 'rev-parse', '--show-toplevel')) !== await realpath(path)) {
+          if ((await readdir(path)).length) throw new Error('An uninitialized submodule contains local files; initialize it and commit those changes before starting collaborative implementation');
+          continue;
+        }
+        if (await git(path, 'status', '--porcelain', '--untracked-files=all', '--ignore-submodules=none')) {
+          throw new Error('Commit changes inside submodules or nested Git repositories before starting collaborative implementation; a Git snapshot cannot include their uncommitted files');
+        }
+      }
+      const tree = await indexed('write-tree');
+      const base = tree === await git(project, 'rev-parse', `${head}^{tree}`) ? head
+        : await git(project, 'commit-tree', tree, '-p', head, '-m', `Agent Duet starting snapshot for ${s.id}`);
+      await git(project, 'update-ref', ref, base, '0'.repeat(head.length));
+      return base;
+    } finally {
+      await rm(temporary, { recursive: true, force: true });
+    }
+  }
   private async initial(s: Session): Promise<WorkspaceState> {
     const previous = await this.load(s);
     if (previous) return previous;
@@ -67,7 +154,7 @@ export class GitWorkspaceManager implements WorkspaceManager {
       if (await realpath(top) !== project) throw new Error('Choose the repository root as the project');
       base = await git(project, 'rev-parse', '--verify', 'HEAD');
     } catch (error) { throw new Error('Build requires a Git repository root with an existing HEAD commit', { cause: error }); }
-    if (await git(project, 'status', '--porcelain', '--untracked-files=all')) throw new Error('Build requires a clean project repository; commit or stash your existing changes first');
+    base = await this.snapshot(s, project, base);
     const state: WorkspaceState = { project, base, agents: {} };
     await this.save(s, state);
     return state;

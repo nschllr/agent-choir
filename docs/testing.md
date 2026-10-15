@@ -296,3 +296,21 @@ warmup. A local run stayed around 14 MB. `npm run check` passed all 306 tests in
 20 files, including the memory regression, UI input and animation checks, and
 real PTY CLI smoke tests. Existing installations need `npm ci` and a rebuild to
 receive the dependency fix; raising Node's heap limit is not the fix.
+
+### Dirty collaboration snapshots — 2026-10-15
+
+Collaborative implementation now snapshots current project files into a private
+Git commit using a temporary index. Both agents start from that baseline and
+retain their separately assigned tasks. Existing workspace metadata or a durable
+baseline ref is reused after a crash, preserving unfinished agent edits.
+
+`npm run check` passed all 314 tests across 20 files. After the final guard for
+nonempty uninitialized submodules, typecheck and build passed again, and the
+workspace suite passed all 22 tests. The real-Git regressions cover staged and
+unstaged edits, deletions, untracked and ignored files, staged ignored additions,
+files removed from tracking, unusual filenames, index flags, separate peer fixes,
+integration, nested state-directory exclusion, and crash recovery. They compare
+the original index byte-for-byte and confirm the original branch and files remain
+unchanged. Unresolved source conflicts and dirty nested repositories are rejected
+without discarding files. These are offline harness checks, not live-provider
+evidence about review or implementation quality.

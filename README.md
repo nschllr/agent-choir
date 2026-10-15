@@ -200,10 +200,21 @@ automatically; see [observed results and remaining checks](docs/testing.md#obser
 
 Direct editing works in ordinary folders and dirty repositories and writes to the
 original project; the harness does not auto-commit these edits. Collaborative build
-preparation requires a clean Git repository root with an existing HEAD. Collaboration
-uses separate worktrees and branches, retained afterward, and an integration candidate
-for review. Turns with Full access or shared additional directories are serialized
-during collaborative implementation because they can reach shared files.
+preparation requires a Git repository root with an existing HEAD; uncommitted changes
+are supported. When implementation first starts, the harness snapshots the current
+files, including tracked edits, deletions and nonignored untracked files, into a private
+Git commit. Both agents start from that snapshot and implement their separately assigned
+tasks in isolated worktrees. Your original files, branch and staging area stay unchanged.
+Ignored untracked files and the harness state directory are excluded. Existing merge
+conflicts must be resolved first; uncommitted files inside submodules or nested Git
+repositories must be committed there because a parent Git snapshot only stores their
+commit IDs. An uninitialized submodule must be empty or initialized before snapshotting.
+
+The snapshot and worktrees are retained across resume, including unfinished agent edits.
+Later edits in the original checkout do not replace the saved starting snapshot. Agent
+changes are combined into a separate integration candidate for review. Turns with Full
+access or shared additional directories are serialized during collaborative implementation
+because they can reach shared files.
 
 ## Permission controls
 
