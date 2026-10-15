@@ -404,6 +404,12 @@ node dist/cli.js --detach --project /absolute/path/to/project --read-only \
 node dist/cli.js --attach SESSION_ID
 ```
 
+When updating an existing installation, run `npm ci` and `npm run build` in the
+source directory before resuming. Updating only `dist` leaves the old renderer
+installed, including its unbounded text caches in older releases. After a crash,
+use the same state directory with `--list` and `--resume`; saved sessions and
+worktrees are retained. The interrupted turn may have unfinished edits.
+
 Ordinary exit pauses. Interactive `--resume` restores a paused view; use `/resume`
 or Ctrl+P to run it. Headless resume explicitly starts work. `/detach` or `--detach`
 starts intentional background execution; `--attach` reconnects. An attached UI's

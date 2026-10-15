@@ -15,6 +15,6 @@
     "test": "vitest run",
     "check": "npm run typecheck && npm run build && npm test"
   },
-  "dependencies": { "ink": "^6.3.1", "react": "^19.2.0", "string-width": "8.3.0" },
-  "devDependencies": { "@types/node": "^24.0.0", "@types/react": "^19.2.0", "tsx": "^4.20.6", "typescript": "^5.9.3", "vitest": "^3.2.4", "ink-testing-library": "^4.0.0" }
+  "dependencies": { "ink": "^8.0.0", "react": "^19.3.1", "string-width": "8.3.0" },
+  "devDependencies": { "@types/node": "^24.0.0", "@types/react": "^19.3.0", "tsx": "^4.20.6", "typescript": "^5.9.3", "vitest": "^3.2.4", "ink-testing-library": "^4.0.0" }
 }

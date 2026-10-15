@@ -280,3 +280,19 @@ baselines, running limit changes, parallel turn reservations, slash-command pars
 and attached UI transport validation. The PTY smoke exercises the visible per-message
 turn counter. Tests use scripted providers and controlled clocks; no live model call
 is needed to verify the harness-owned limits.
+
+### Renderer memory regression — 2026-10-15
+
+Ink 6.8.0 retained unique text indefinitely in its measurement and wrapping
+caches. A local probe of 5,000 changing multiline strings grew from 19 MB to
+74 MB of retained JavaScript heap despite explicit garbage collection. This is
+a reproduced leak that can contribute to long-session out-of-memory crashes;
+it does not establish the sole cause of the reported crash on another machine.
+
+Upgraded to Ink 8 and its required React versions, using Ink's window-size hook
+for resize handling. The renderer-cache regression processes 24,576 unique text
+updates without collecting terminal frames and checks retained heap after cache
+warmup. A local run stayed around 14 MB. `npm run check` passed all 306 tests in
+20 files, including the memory regression, UI input and animation checks, and
+real PTY CLI smoke tests. Existing installations need `npm ci` and a rebuild to
+receive the dependency fix; raising Node's heap limit is not the fix.

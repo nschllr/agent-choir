@@ -1,6 +1,6 @@
 import { limitUsage, validLimits } from '../limits.js';
 import React, { useEffect, useRef, useState } from 'react';
-import { Box, Text, useApp, useInput, useStdout, type DOMElement } from 'ink';
+import { Box, Text, useApp, useInput, useWindowSize, type DOMElement } from 'ink';
 import type { AgentId, Decision, ProviderKind, UIController, ViewState } from '../types.js';
 import { agentName, isCollaborating, sessionAgents } from '../agents.js';
 import { tailLines, terminalText } from './text.js';
@@ -203,8 +203,8 @@ function IntegrationCard({ integration }: { integration: NonNullable<ViewState['
 export function App({ controller, onExit, mouse }: AppProps) {
   const view = useView(controller);
   const { exit } = useApp();
-  const { stdout } = useStdout();
-  const [size, setSize] = useState({ width: stdout.columns || 100, height: stdout.rows || 32 });
+  const { columns, rows: terminalRows } = useWindowSize();
+  const size = { width: columns, height: terminalRows };
   const [editor, setEditor] = useState({ draft: '', cursor: 0 });
   const editorRef = useRef(editor);
   const { draft, cursor } = editor;
@@ -258,11 +258,6 @@ export function App({ controller, onExit, mouse }: AppProps) {
     setModelAgent(null);
     setNotice(`${agentName(view.session, agent)} · ${settings.model ?? 'native model'} · ${settings.effort ?? 'default effort'} · applies next turn`);
   };
-  useEffect(() => {
-    const resize = () => setSize({ width: stdout.columns || 100, height: stdout.rows || 32 });
-    stdout.on('resize', resize);
-    return () => { stdout.off('resize', resize); };
-  }, [stdout]);
   const run = (action: () => Promise<void>) => { void action().catch(error => setNotice(terminalText(error instanceof Error ? error.message : String(error)))); };
   const close = () => {
     if (closing) return;

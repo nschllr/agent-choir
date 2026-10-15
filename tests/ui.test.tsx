@@ -1,12 +1,19 @@
 import React from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { render, cleanup } from 'ink-testing-library';
+import { render as renderInk, cleanup } from 'ink-testing-library';
 import { App } from '../src/ui/App.js';
 import { terminalText, tailLines } from '../src/ui/text.js';
 import { MouseEvents } from '../src/ui/mouse.js';
 import type { UIController, ViewState } from '../src/types.js';
 
 afterEach(cleanup);
+// Give the test terminal an explicit height instead of depending on Ink's fallback.
+function render(ui: React.ReactElement) {
+  const screen = renderInk(ui);
+  Object.defineProperty(screen.stdout, 'rows', { value: 32, configurable: true });
+  screen.stdout.emit('resize');
+  return screen;
+}
 // Ink throttles terminal renders; allow a complete frame between key presses.
 const settle = () => new Promise(resolve => setTimeout(resolve, 100));
 
