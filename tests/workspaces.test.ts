@@ -353,6 +353,25 @@ describe('isolated build workspaces', () => {
     expect(await f.manager.finalize(f.s, 'claude')).toBe(null);
     expect(await git(w.cwd, 'rev-parse', 'HEAD')).toBe(f.base);
   });
+  it('commits edits from a repeated completion after an interrupted finalization', async () => {
+    const f = await fixture();
+    const w = await f.manager.prepare(f.s, 'claude');
+    await writeFile(join(w.cwd, 'first.txt'), 'first attempt');
+    f.s.completedTasks = { a: 'done' };
+    const first = await f.manager.finalize(f.s, 'claude');
+    expect(first).toMatch(/^[a-f0-9]{40,64}$/);
+    // The controller never recorded the completion, so the agent completed the task again with more edits.
+    await writeFile(join(w.cwd, 'second.txt'), 'second attempt');
+    const second = await f.manager.finalize(f.s, 'claude');
+    expect(second).toMatch(/^[a-f0-9]{40,64}$/);
+    expect(second).not.toBe(first);
+    expect(await git(w.cwd, 'status', '--porcelain')).toBe('');
+    expect(await f.manager.finalize(f.s, 'claude')).toBe(null);
+    f.s.completedTasks = { a: 'done', b: 'done' };
+    await f.manager.finalize(f.s, 'codex');
+    const integrated = await f.manager.merge(f.s);
+    expect(await readFile(join(integrated.path, 'second.txt'), 'utf8')).toBe('second attempt');
+  });
   it('integrates finalized snapshots instead of later unfinished branch commits', async () => {
     const f = await fixture();
     const w = await f.manager.prepare(f.s, 'claude');

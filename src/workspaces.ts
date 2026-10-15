@@ -246,11 +246,13 @@ export class GitWorkspaceManager implements WorkspaceManager {
       if (!state || !target) return null;
       await this.branch(s, state, agent);
       const completed = (s.decisions.find(d => d.kind === 'plan')?.tasks ?? []).filter(t => t.owner === agent && Object.hasOwn(s.completedTasks, t.id) && !target.completed.includes(t.id));
-      if (!completed.length) return null;
+      // A task recorded here but interrupted before the session accepted it is
+      // completed again later; that retry's edits must still reach the snapshot.
+      if (!completed.length && !target.completed.length) return null;
       let commit: string | null = null;
       if (await git(target.path, 'status', '--porcelain', '--untracked-files=all')) {
         await git(target.path, 'add', '--all');
-        await git(target.path, 'commit', '-m', `Complete ${agent} tasks: ${completed.map(t => t.id).join(', ')}`);
+        await git(target.path, 'commit', '-m', `Complete ${agent} tasks: ${(completed.length ? completed.map(t => t.id) : target.completed).join(', ')}`);
       }
       const head = await git(target.path, 'rev-parse', 'HEAD');
       if (head !== (target.finalizedCommit ?? state.base)) commit = head;

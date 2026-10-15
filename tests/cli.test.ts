@@ -78,7 +78,8 @@ describe('built CLI offline smoke', () => {
     try {
       const args = mode === 'headless' ? ['--demo', '--headless', '--json'] : mode === 'interactive' ? ['--demo', '--agent', 'codex'] : mode === 'read-only' ? ['--read-only'] : [];
       // Authentication guards ensure even a startup regression cannot call a real provider.
-      const output = await execute('python3', [resolve('tests/fixtures/interactive.py'), process.execPath, executable, JSON.stringify(['--state-dir', directory, ...args]), mode], { timeout: 20_000, maxBuffer: 1024 * 1024, env: { ...process.env, OPENAI_API_KEY: 'offline-test-guard', ANTHROPIC_API_KEY: 'offline-test-guard' } });
+      // The fixture matches plain text; colors would place escape codes inside styled composer labels.
+      const output = await execute('python3', [resolve('tests/fixtures/interactive.py'), process.execPath, executable, JSON.stringify(['--state-dir', directory, ...args]), mode], { timeout: 20_000, maxBuffer: 1024 * 1024, env: { ...process.env, OPENAI_API_KEY: 'offline-test-guard', ANTHROPIC_API_KEY: 'offline-test-guard', FORCE_COLOR: '0' } });
       expect(output.stdout).toContain('exited normally');
       if (mode !== 'headless') {
         const store = new SessionStore(directory);
