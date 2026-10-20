@@ -74,7 +74,7 @@ export class CodexProvider implements AgentProvider {
         }
       }
       if (message.method === 'error') fail(new Error('Codex reported a native agent error. Check its CLI login and configuration.'));
-    }, fail);
+    }, fail, { diagnostics: this.options.diagnostics });
     this.active.add(process);
     void process.closed.then(() => fail(new Error('Codex exited before completing its turn')));
     const request = (method: string, params: unknown, timeout = 30_000): Promise<any> => new Promise((resolve, reject) => {

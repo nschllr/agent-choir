@@ -153,6 +153,20 @@ describe('native provider adapters with local protocol fixtures', () => {
     await expect(provider.run(turn(f.cwd), () => {})).rejects.toThrow('Claude turn failed. Check native login');
     await provider.dispose();
   });
+  it('forwards native stderr only to an explicit diagnostics sink', async () => {
+    const code = `process.stderr.write('private diagnostic line\\n'); process.stdin.resume(); process.stdin.on('end', () => console.log(JSON.stringify({ type: 'result', subtype: 'success', structured_output: { message: 'ok', actions: [] } })));`;
+    const f = await fixture(code);
+    const captured: string[] = [];
+    const logged = new ClaudeProvider({ ...f.options, diagnostics: text => captured.push(text) });
+    expect((await logged.run(turn(f.cwd), () => {})).message).toBe('ok');
+    await logged.dispose();
+    expect(captured.join('')).toContain('private diagnostic line');
+    const silent = new ClaudeProvider(f.options);
+    const events: ProviderEvent[] = [];
+    expect((await silent.run(turn(f.cwd), e => events.push(e))).message).toBe('ok');
+    await silent.dispose();
+    expect(JSON.stringify(events)).not.toContain('private diagnostic');
+  });
   it('rejects malformed model actions instead of emitting a trusted reply', async () => {
     const f = await fixture(`process.stdin.resume();process.stdin.on('end',()=>console.log(JSON.stringify({type:'result',subtype:'success',structured_output:{message:'bad',actions:[{type:'execute',command:'unsafe'}]}})));`);
     const events: ProviderEvent[] = []; const provider = new ClaudeProvider(f.options);

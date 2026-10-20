@@ -73,6 +73,24 @@ describe('built CLI offline smoke', () => {
       expect(shared.turns).toBeGreaterThan(1);
     } finally { await rm(directory, { recursive: true, force: true }); }
   }, 20_000);
+  it('cleans finished sessions and refuses to adopt without an accepted candidate', async () => {
+    const directory = await mkdtemp('/tmp/duet-cli-clean-');
+    try {
+      const session = JSON.parse((await cli(['--demo', '--headless', '--json', '--state-dir', directory])).stdout);
+      expect(session.status).toBe('complete');
+      await expect(cli(['--adopt', session.id, '--state-dir', directory])).rejects.toMatchObject({ stderr: expect.stringContaining('Only an accepted integration candidate') });
+      await expect(cli(['--clean', session.id, '--project', '.', '--state-dir', directory])).rejects.toMatchObject({ stderr: expect.stringContaining('only a session ID') });
+      const all = await cli(['--clean-all', '--state-dir', directory]);
+      expect(all.stdout).toContain(`${session.id}  removed 0`);
+      expect(all.stdout).toContain('Cleaned 1 sessions.');
+      expect((await cli(['--clean', 'missing-session', '--state-dir', directory]).catch(error => error)).stdout).toContain('not cleaned: Unknown session');
+      // Cleanup keeps the saved transcript; the listing names the project each session was started in.
+      expect(JSON.parse((await cli(['--list', '--json', '--state-dir', directory])).stdout)).toHaveLength(1);
+      const listing = (await cli(['--list', '--state-dir', directory])).stdout;
+      expect(listing).toContain(`${session.id}  complete`);
+      expect(listing).toContain(`\n    ${session.project}`);
+    } finally { await rm(directory, { recursive: true, force: true }); }
+  }, 20_000);
   it.skipIf(!hasPythonPty).each(['interactive', 'headless', 'empty', 'read-only'] as const)('opens directly into %s execution', async mode => {
     const directory = await mkdtemp('/tmp/duet-cli-start-');
     try {

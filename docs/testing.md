@@ -29,11 +29,11 @@ and remains unavailable in read-only sessions.
 | Protocol | Exact schema validation; malformed actions and coercive values fail |
 | Engine | Exact-version votes, revision handling, escalation, atomic rejection, task graph/ownership/completion gates |
 | Controller | Independent initial thoughts, peer scheduling, limits, cancellation and steering, persistence, integration checkpoint, no-reply markers and empty-response loop prevention |
-| Workspaces | Original checkout preservation, dirty-repository refusal, committed dependencies, finalized snapshots, conflict aborts, crash reconciliation |
+| Workspaces | Original checkout preservation, dirty-repository refusal, committed dependencies, finalized snapshots, repeated completions, conflict aborts, crash reconciliation, adoption into a clean or changed checkout, cleanup of branches/worktrees/refs |
 | Store | Durable snapshots, private storage, session ownership, interrupted-run recovery |
 | Context delivery | Incremental messages and independent state sections, private routing, mode/roster/path updates, legacy cursor migration, persisted acknowledgements, interrupted/replaced native context recovery |
 | Context memory | Original file preservation, provenance, stable content updates, concrete handoffs, overlapping snapshots, input bounds and symlink rejection |
-| Providers/streaming | JSON protocol handling, visible text decoding, native configuration guards, subprocess cleanup |
+| Providers/streaming | JSON protocol handling, visible text decoding, native configuration guards, opt-in stderr diagnostics, subprocess cleanup |
 | Background | Local worker transport, attachment, bounded request handling |
 | Terminal UI | Panes, composer and recipient controls, activity and checkpoint rendering |
 

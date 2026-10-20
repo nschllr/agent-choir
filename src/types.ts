@@ -25,8 +25,12 @@ export interface IntegrationState {
   status: 'pending' | 'conflicts' | 'review' | 'accepted' | 'resolving' | 'peer_review' | 'consulting' | 'waiting_user';
   path?: string; notes?: string; owner?: AgentId; reviewer?: AgentId;
   revision?: string; validation?: string; rounds?: number; userResolution?: string;
+  /** Revision applied to the original checkout with /adopt. */
+  adopted?: string;
 }
 export interface IntegrationCandidate { path: string; conflicts: boolean; revision?: string; needsValidation?: boolean }
+export interface AdoptionResult { revision: string; files: string[]; branch: string }
+export interface CleanupResult { removed: string[]; warnings: string[] }
 export type CollaborationAction =
   | { type: 'propose'; id: string; kind: 'plan' | 'decision'; title: string; proposal: string; tasks: TaskSpec[] }
   | { type: 'position'; id: string; version: number; position: Position; reason: string }
@@ -121,6 +125,8 @@ export interface UIController {
   setLimits?(limits: SessionLimits): Promise<void>;
   resolve(id: string, resolution: string): Promise<void>;
   acceptIntegration?(notes: string): Promise<void>;
+  /** Apply the accepted candidate to the original checkout; cleans up unless keep is set. */
+  adoptIntegration?(keep?: boolean): Promise<void>;
   detach?(): Promise<void>;
   close(): Promise<void>;
 }

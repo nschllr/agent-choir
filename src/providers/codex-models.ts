@@ -22,7 +22,7 @@ export async function codexModelCatalog(cwd: string, options: ProcessOptions, ac
     pending.delete(message.id);
     if (message.error) request.reject(new Error('Codex model discovery failed. Check native CLI compatibility.'));
     else request.resolve(message.result);
-  }, fail);
+  }, fail, { diagnostics: options.diagnostics });
   active.add(native);
   void native.closed.then(() => fail(new Error('Codex model discovery exited')));
   const timer = setTimeout(() => { fail(new Error('Codex model discovery timed out')); native.stop(); }, 10_000);

@@ -353,6 +353,65 @@ describe('isolated build workspaces', () => {
     expect(await f.manager.finalize(f.s, 'claude')).toBe(null);
     expect(await git(w.cwd, 'rev-parse', 'HEAD')).toBe(f.base);
   });
+  it('adopts the accepted candidate into the original checkout as uncommitted changes, then cleans up', async () => {
+    const f = await fixture();
+    const [claude, codex] = await Promise.all([f.manager.prepare(f.s, 'claude'), f.manager.prepare(f.s, 'codex')]);
+    await writeFile(join(claude.cwd, 'claude.txt'), 'Claude change\n');
+    await writeFile(join(codex.cwd, 'shared.txt'), 'original\nCodex line\n');
+    f.s.completedTasks = { a: 'done', b: 'done' };
+    await f.manager.finalize(f.s, 'claude'); await f.manager.finalize(f.s, 'codex');
+    const integrated = await f.manager.merge(f.s);
+    f.s.integration = { status: 'accepted', path: integrated.path, revision: integrated.revision };
+    const adopted = await f.manager.adopt(f.s);
+    expect(adopted).toMatchObject({ revision: integrated.revision, branch: `duet/${f.s.id}/integration` });
+    expect([...adopted.files].sort()).toEqual(['claude.txt', 'shared.txt']);
+    expect(await git(f.project, 'rev-parse', 'HEAD')).toBe(f.base);
+    expect(await git(f.project, 'branch', '--show-current')).toBe('main');
+    expect((await git(f.project, 'status', '--porcelain')).split('\n').map(line => line.trim()).sort()).toEqual(['?? claude.txt', 'M shared.txt']);
+    expect(await readFile(join(f.project, 'claude.txt'), 'utf8')).toBe('Claude change\n');
+    expect(await readFile(join(f.project, 'shared.txt'), 'utf8')).toBe('original\nCodex line\n');
+    const cleaned = await f.manager.clean(f.s);
+    expect(cleaned.warnings).toEqual([]);
+    expect(cleaned.removed).toEqual(expect.arrayContaining([`duet/${f.s.id}/claude`, `duet/${f.s.id}/codex`, `duet/${f.s.id}/integration`, `refs/duet/${f.s.id}/base`]));
+    expect(await git(f.project, 'branch', '--list', 'duet/*')).toBe('');
+    expect(await git(f.project, 'for-each-ref', 'refs/duet')).toBe('');
+    expect((await git(f.project, 'worktree', 'list', '--porcelain')).match(/^worktree /gm)).toHaveLength(1);
+    await expect(readFile(join(f.stateDir, 'worktrees', f.s.id, 'workspace.json'))).rejects.toMatchObject({ code: 'ENOENT' });
+    // The user's adopted changes survive cleanup.
+    expect(await readFile(join(f.project, 'claude.txt'), 'utf8')).toBe('Claude change\n');
+  });
+  it('refuses adoption without changing anything when a touched file changed since the snapshot', async () => {
+    const f = await fixture();
+    const w = await f.manager.prepare(f.s, 'claude');
+    await writeFile(join(w.cwd, 'shared.txt'), 'agent version\n');
+    await writeFile(join(w.cwd, 'claude.txt'), 'new file\n');
+    f.s.completedTasks = { a: 'done' };
+    await f.manager.finalize(f.s, 'claude');
+    const integrated = await f.manager.merge(f.s);
+    f.s.integration = { status: 'accepted', path: integrated.path, revision: integrated.revision };
+    await writeFile(join(f.project, 'shared.txt'), 'user edit after snapshot\n');
+    await expect(f.manager.adopt(f.s)).rejects.toThrow('does not apply cleanly');
+    expect(await readFile(join(f.project, 'shared.txt'), 'utf8')).toBe('user edit after snapshot\n');
+    await expect(readFile(join(f.project, 'claude.txt'))).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(await git(f.project, 'branch', '--list', `duet/${f.s.id}/integration`)).toContain('integration');
+  });
+  it('adopts on top of a dirty starting snapshot without committing the user\'s own changes', async () => {
+    const f = await fixture([{ id: 'a', owner: 'claude', description: 'a', dependsOn: [] }]);
+    await writeFile(join(f.project, 'shared.txt'), 'local uncommitted\n');
+    await writeFile(join(f.project, 'notes.txt'), 'untracked notes\n');
+    const w = await f.manager.prepare(f.s, 'claude');
+    expect(await readFile(join(w.cwd, 'shared.txt'), 'utf8')).toBe('local uncommitted\n');
+    await writeFile(join(w.cwd, 'shared.txt'), 'local uncommitted\nagent line\n');
+    f.s.completedTasks = { a: 'done' };
+    await f.manager.finalize(f.s, 'claude');
+    const integrated = await f.manager.merge(f.s);
+    f.s.integration = { status: 'accepted', path: integrated.path, revision: integrated.revision };
+    expect((await f.manager.adopt(f.s)).files).toEqual(['shared.txt']);
+    expect(await readFile(join(f.project, 'shared.txt'), 'utf8')).toBe('local uncommitted\nagent line\n');
+    expect(await readFile(join(f.project, 'notes.txt'), 'utf8')).toBe('untracked notes\n');
+    expect(await git(f.project, 'rev-parse', 'HEAD')).toBe(f.base);
+    expect(await git(f.project, 'stash', 'list')).toBe('');
+  });
   it('commits edits from a repeated completion after an interrupted finalization', async () => {
     const f = await fixture();
     const w = await f.manager.prepare(f.s, 'claude');

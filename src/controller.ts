@@ -8,7 +8,7 @@ import type { SessionLimits } from './types.js';
 import { integrationPrompt } from './integration.js';
 import { nativeSessionTitle } from './session-label.js';
 import { claudeEfforts, codexEfforts, fallbackCatalog, validModelSettings } from './model-settings.js';
-import type { ModelCatalog, ModelSettings, PermissionSettings, IntegrationCandidate, WorkspaceAccess } from './types.js';
+import type { ModelCatalog, ModelSettings, PermissionSettings, IntegrationCandidate, WorkspaceAccess, AdoptionResult, CleanupResult } from './types.js';
 import { applyReply, canImplement, resolveDecision } from './engine.js';
 import { buildContextDelivery, contextHash, contextMessages, hasPendingContext, messageHash } from './context-delivery.js';
 import type { ContextMemory } from './context-memory.js';
@@ -27,6 +27,8 @@ interface Workspaces extends WorkspaceManager {
   prepareIntegration?(session: Session, agent: AgentId): Promise<WorkspaceAccess>;
   finishIntegration?(session: Session): Promise<IntegrationCandidate>;
   verifyIntegration?(session: Session, revision: string): Promise<boolean>;
+  adopt?(session: Session): Promise<AdoptionResult>;
+  clean?(session: Session): Promise<CleanupResult>;
 }
 export class DuetController implements UIController {
   private catalogs = new Map<AgentId, Promise<ModelCatalog>>();
@@ -336,6 +338,25 @@ export class DuetController implements UIController {
     integration.status = 'accepted'; integration.notes = notes.trim();
     this.state.session.status = !isCollaborating(this.state.session) && this.state.session.pendingRecipients?.length ? 'paused' : 'complete'; this.note(`User accepted integrated candidate. Validation: ${notes.trim()}`);
     await this.memory?.prepare(this.state.session);
+  }
+  async adoptIntegration(keep = false): Promise<void> {
+    if (this.closed || this.rosterChanging) throw new Error('Session cannot adopt the candidate now');
+    if (this.running) throw new Error('Pause before adopting the integration candidate');
+    const integration = this.state.session.integration;
+    if (!integration || integration.status !== 'accepted') throw new Error('Only an accepted integration candidate can be adopted');
+    if (integration.adopted) throw new Error(`Candidate ${integration.adopted.slice(0, 12)} was already adopted. Clean up with --clean if its branches remain.`);
+    if (!this.workspaces.adopt || !this.workspaces.clean) throw new Error('Adoption is unavailable for this session');
+    this.rosterChanging = true;
+    try {
+      const result = await this.workspaces.adopt(this.state.session);
+      integration.adopted = result.revision;
+      this.note(result.files.length
+        ? `Adopted candidate ${result.revision.slice(0, 12)} into the original checkout as uncommitted changes (${result.files.length} files). Review with git diff and commit as usual.`
+        : `Candidate ${result.revision.slice(0, 12)} contains no changes relative to the starting snapshot.`);
+      if (keep) { this.note(`Branches and worktrees were kept; remove them later with --clean ${this.state.session.id}.`); return; }
+      const cleanup = await this.workspaces.clean(this.state.session);
+      this.note(`Removed ${cleanup.removed.length} session branches, worktrees and refs.${cleanup.warnings.length ? ` Warnings: ${cleanup.warnings.join(' ')}` : ''}`);
+    } finally { this.rosterChanging = false; }
   }
   async close(): Promise<void> {
     if (this.closed) return;

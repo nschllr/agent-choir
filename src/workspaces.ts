@@ -4,7 +4,7 @@ import { promisify } from 'node:util';
 import { lstat, mkdir, mkdtemp, readFile, readdir, realpath, rename, rm, writeFile } from 'node:fs/promises';
 import { join, relative, resolve, sep } from 'node:path';
 import { canImplement } from './engine.js';
-import { type AgentId, type Session, type WorkspaceAccess, type WorkspaceManager, type IntegrationCandidate } from './types.js';
+import { type AgentId, type Session, type WorkspaceAccess, type WorkspaceManager, type IntegrationCandidate, type AdoptionResult, type CleanupResult } from './types.js';
 
 const exec = promisify(execFile);
 interface BranchState { path: string; branch: string; completed: string[]; finalizedCommit?: string; }
@@ -310,6 +310,66 @@ export class GitWorkspaceManager implements WorkspaceManager {
       const validatedHead = await git(target.path, 'rev-parse', 'HEAD');
       const merged = await this.mergeSources(s, state, target);
       return { ...merged, needsValidation: !merged.conflicts && merged.revision !== validatedHead };
+    });
+  }
+  /** Apply the accepted candidate to the original checkout as uncommitted changes. HEAD, the
+   * branch and the index stay untouched; the user reviews and commits with ordinary Git. */
+  adopt(s: Session): Promise<AdoptionResult> {
+    return this.serial(async () => {
+      const state = await this.load(s);
+      if (!state?.integration) throw new Error('No integration candidate exists for this session');
+      const target = await this.branch(s, state, 'integration');
+      if (await this.hasMerge(target.path) || await git(target.path, 'status', '--porcelain', '--untracked-files=all')) throw new Error('The integration worktree has unfinished changes; finish or discard them before adopting');
+      const revision = await git(target.path, 'rev-parse', 'HEAD');
+      if (s.integration?.revision && s.integration.revision !== revision) throw new Error('The integration worktree no longer matches the reviewed candidate revision');
+      if (await git(state.project, 'ls-files', '--unmerged')) throw new Error('Resolve existing merge conflicts in the original checkout before adopting');
+      const files = (await runGit(state.project, ['diff', '--name-only', '-z', state.base, revision], { raw: true })).split('\0').filter(Boolean);
+      if (!files.length) return { revision, files, branch: target.branch };
+      const temporary = await mkdtemp(join(await realpath(this.stateDir), 'adopt-'));
+      try {
+        const patch = join(temporary, 'candidate.patch');
+        await git(state.project, 'diff', '--binary', '--full-index', `--output=${patch}`, state.base, revision);
+        // Preimages are checked against the working tree, so a file edited since the
+        // snapshot refuses the whole patch instead of mixing the user's and agents' changes.
+        try { await git(state.project, 'apply', '--check', '--whitespace=nowarn', patch); }
+        catch (error) { throw new Error(`The candidate does not apply cleanly; files changed in the original checkout since the snapshot. Commit or stash those changes and retry, or merge branch ${target.branch} manually. Nothing was changed.`, { cause: error }); }
+        await git(state.project, 'apply', '--whitespace=nowarn', patch);
+      } finally { await rm(temporary, { recursive: true, force: true }); }
+      return { revision, files, branch: target.branch };
+    });
+  }
+  /** Remove this session's worktrees, branches and snapshot ref. Unfinalized worktree edits are discarded. */
+  clean(s: Session): Promise<CleanupResult> {
+    return this.serial(async () => {
+      const directory = this.directory(s);
+      const removed: string[] = [], warnings: string[] = [];
+      let project: string | undefined;
+      try { project = (await this.load(s))?.project; }
+      catch (error) { warnings.push(`Workspace metadata was not usable: ${error instanceof Error ? error.message : String(error)}`); }
+      project ??= await realpath(s.project).catch(() => undefined);
+      let repository = false;
+      if (project) { try { repository = await realpath(await git(project, 'rev-parse', '--show-toplevel')) === project; } catch { /* Not a repository any more. */ } }
+      if (repository && project) {
+        for (const name of [...agentIds(s), 'integration']) {
+          const path = join(directory, name), branch = `duet/${s.id}/${name}`;
+          const registered = (await git(project, 'worktree', 'list', '--porcelain', '-z')).split('\0').some(field => field.startsWith('worktree ') && resolve(field.slice(9)) === path);
+          if (registered) {
+            try { await git(project, 'worktree', 'remove', '--force', path); removed.push(path); }
+            catch (error) { warnings.push(error instanceof Error ? error.message : String(error)); }
+          }
+          let exists = true;
+          try { await git(project, 'show-ref', '--verify', '--quiet', `refs/heads/${branch}`); } catch { exists = false; }
+          if (exists) {
+            try { await git(project, 'branch', '-D', branch); removed.push(branch); }
+            catch (error) { warnings.push(error instanceof Error ? error.message : String(error)); }
+          }
+        }
+        const ref = `refs/duet/${s.id}/base`;
+        try { await git(project, 'rev-parse', '--verify', '--quiet', ref); await git(project, 'update-ref', '-d', ref); removed.push(ref); } catch { /* Absent. */ }
+        try { await git(project, 'worktree', 'prune'); } catch (error) { warnings.push(error instanceof Error ? error.message : String(error)); }
+      } else warnings.push('The original repository is unavailable; its branches and refs were not removed');
+      await rm(directory, { recursive: true, force: true });
+      return { removed, warnings };
     });
   }
   verifyIntegration(s: Session, revision: string): Promise<boolean> {

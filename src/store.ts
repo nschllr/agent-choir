@@ -64,6 +64,7 @@ function validate(value: unknown): asserts value is Session {
     if (i.status === 'peer_review' && !i.revision) return invalid();
     if (i.rounds !== undefined && (!Number.isSafeInteger(i.rounds) || (i.rounds as number) < 0)) return invalid();
     for (const key of ['validation', 'userResolution']) if (i[key] !== undefined && typeof i[key] !== 'string') return invalid();
+    if (i.adopted !== undefined && (typeof i.adopted !== 'string' || !/^[0-9a-f]{40,64}$/.test(i.adopted) || i.status !== 'accepted')) return invalid();
   }
   if (!Array.isArray(value.messages) || !value.messages.every(item => isRecord(item) && ['id', 'at', 'text'].every(key => typeof item[key] === 'string') && member(item.from, ['user', 'system', ...agents]) && member(item.to, ['both', ...agents]) && (item.delivery === undefined || (item.delivery === 'display-only' && member(item.from, ['system', ...agents]))))) return invalid();
   if (!Array.isArray(value.activities) || !value.activities.every(item => isRecord(item) && ['id', 'at', 'text'].every(key => typeof item[key] === 'string') && member(item.agent, agents) && member(item.kind, ['tool', 'status', 'error']))) return invalid();

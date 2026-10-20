@@ -85,7 +85,7 @@ export class ClaudeProvider implements AgentProvider {
           const reply = parseReply(data); emit({ type: 'reply', reply }); resolveReply(reply);
         } catch { rejectReply(new Error('Claude returned an invalid collaboration response')); }
       }
-    }, rejectReply);
+    }, rejectReply, { diagnostics: this.options.diagnostics });
     this.active.add(process);
     const abort = () => { rejectReply(abortError()); process.stop(); };
     turn.signal.addEventListener('abort', abort, { once: true });

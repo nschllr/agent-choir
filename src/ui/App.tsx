@@ -196,7 +196,7 @@ function IntegrationCard({ integration }: { integration: NonNullable<ViewState['
   return <Box flexDirection="column" borderStyle="single" borderColor={accepted ? 'green' : 'yellow'} paddingX={1}>
     <Text bold color={accepted ? 'green' : 'yellow'}>Integration · {integration.status.replace('_', ' ')}</Text>
     <Text dimColor wrap="truncate">{integration.path ? terminalText(integration.path) : 'Preparing the combined candidate'}</Text>
-    <Text wrap="truncate">{integration.status === 'waiting_user' ? 'Your decision: /resolve integration <decision>, then /resume' : integration.status === 'review' ? 'Resume for agent integration, or /accept <your validation evidence>' : integration.status === 'conflicts' ? '/resume lets the integration agent resolve conflicts.' : accepted ? terminalText(integration.notes || 'Combined candidate accepted.') : integration.status === 'resolving' ? 'Integration owner is resolving conflicts and validating the combined code.' : integration.status === 'peer_review' ? 'Peer reviews the candidate revision and validation evidence (read-only).' : integration.status === 'consulting' ? 'Peer is answering the integration owner’s question (read-only).' : 'Preparing the combined candidate.'}</Text>
+    <Text wrap="truncate">{integration.status === 'waiting_user' ? 'Your decision: /resolve integration <decision>, then /resume' : integration.status === 'review' ? 'Resume for agent integration, or /accept <your validation evidence>' : integration.status === 'conflicts' ? '/resume lets the integration agent resolve conflicts.' : accepted ? integration.adopted ? 'Adopted into your checkout as uncommitted changes. Review with git diff and commit.' : '/adopt applies it to your checkout and cleans up; /adopt keep retains the branches.' : integration.status === 'resolving' ? 'Integration owner is resolving conflicts and validating the combined code.' : integration.status === 'peer_review' ? 'Peer reviews the candidate revision and validation evidence (read-only).' : integration.status === 'consulting' ? 'Peer is answering the integration owner’s question (read-only).' : 'Preparing the combined candidate.'}</Text>
   </Box>;
 }
 
@@ -311,7 +311,7 @@ export function App({ controller, onExit, mouse }: AppProps) {
     if (!text) return;
     if (text.startsWith('/')) {
       const [command, ...args] = text.split(/\s+/);
-      if (command === '/help') setNotice('Ctrl+L or /permissions: read-only, project, full access; /permissions add|remove PATH. Ctrl+R or /model: model/effort; /effort LEVEL. Ctrl+Y /copy: text selection; Esc returns. Wheel scrolls; click selects a peer. PgUp/PgDn; Home/End; Alt+↑/↓; Ctrl+F pane; Ctrl+X expand code; Ctrl+K next code. Ctrl+B collaboration. /limits [turns N|minutes N] · /chat /split /agent /pause /resume /to /steer /resolve /accept /detach /quit');
+      if (command === '/help') setNotice('Ctrl+L or /permissions: read-only, project, full access; /permissions add|remove PATH. Ctrl+R or /model: model/effort; /effort LEVEL. Ctrl+Y /copy: text selection; Esc returns. Wheel scrolls; click selects a peer. PgUp/PgDn; Home/End; Alt+↑/↓; Ctrl+F pane; Ctrl+X expand code; Ctrl+K next code. Ctrl+B collaboration. /limits [turns N|minutes N] · /chat /split /agent /pause /resume /to /steer /resolve /accept /adopt [keep] /detach /quit');
       else if (command === '/limits') {
         if (!args.length) setNotice(`Limits per message: ${view.session.maxTurns} turns, ${view.session.maxMinutes} active minutes. /limits turns N or /limits minutes N. New messages reset both counters.`);
         else {
@@ -360,6 +360,11 @@ export function App({ controller, onExit, mouse }: AppProps) {
       else if (command === '/accept' && args.length >= 1) {
         if (controller.acceptIntegration) run(() => controller.acceptIntegration!(args.join(' ')));
         else setNotice('Integration acceptance is unavailable for this session.');
+      }
+      else if (command === '/adopt') {
+        if (args.length > 1 || (args.length === 1 && args[0] !== 'keep')) { setNotice('Use /adopt to apply the accepted candidate and clean up, or /adopt keep to retain its branches.'); return; }
+        if (controller.adoptIntegration) run(() => controller.adoptIntegration!(args[0] === 'keep'));
+        else setNotice('Adoption is unavailable for this session.');
       }
       else if (command === '/to' && args.length) {
         const requested = args.join(' ').toLowerCase();

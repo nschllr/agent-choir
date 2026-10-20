@@ -64,7 +64,9 @@ process.on('disconnect',stop);
 process.on('SIGTERM',stop);process.on('SIGINT',stop);
 child=spawn(binary,JSON.parse(argsJSON),{stdio:'inherit',detached:process.platform!=='win32'});
 if(child.pid) {leaderBirth=info(child.pid)?.birth; if(leaderBirth)owned.set(child.pid,leaderBirth);}
-const poll=setInterval(remember,100);
+// Periodic scans keep descendants attributable after an intermediate parent
+// exits; stop() rescans immediately. Every tick reads all of /proc, so keep it slow.
+const poll=setInterval(remember,500);
 child.on('error',error=>{
   process.send?.({type:'spawn_error',code:error.code});status=127;finish();
 });

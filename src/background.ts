@@ -11,7 +11,7 @@ import type { Delivery, Recipient, UIController, ViewState } from './types.js';
 const MAX_FRAME = 8 * 1024 * 1024;
 const MAX_REQUEST = 100_000;
 const deliveries = ['queued', 'immediate'];
-type Integrating = UIController & { acceptIntegration?(notes: string): Promise<void> };
+type Integrating = UIController & { acceptIntegration?(notes: string): Promise<void>; adoptIntegration?(keep?: boolean): Promise<void> };
 function socketPath(stateDir: string, id: string): string {
   const path = join(stateDir, 'sockets', createHash('sha256').update(id).digest('hex').slice(0, 24) + '.sock');
   if (Buffer.byteLength(path) > 100) throw new Error('State directory path is too long for background sockets');
@@ -64,6 +64,7 @@ async function dispatch(controller: Integrating, method: unknown, args: unknown)
     case 'setDelivery': if (args.length === 1 && deliveries.includes(args[0])) return controller.setDelivery(args[0] as Delivery); break;
     case 'resolve': if (args.length === 2 && string(args[0], 200) && string(args[1])) return controller.resolve(args[0], args[1]); break;
     case 'acceptIntegration': if (args.length === 1 && string(args[0]) && controller.acceptIntegration) return controller.acceptIntegration(args[0]); break;
+    case 'adoptIntegration': if (args.length <= 1 && (args[0] === undefined || typeof args[0] === 'boolean') && controller.adoptIntegration) return controller.adoptIntegration(args[0]); break;
   }
   throw new Error('Unknown command or invalid arguments');
 }
@@ -115,7 +116,7 @@ export async function serveController(controller: UIController, stateDir: string
   } };
 }
 /** Attach a cached synchronous UI view to an existing worker. close pauses; disconnect detaches. */
-export async function connectController(stateDir: string, sessionId: string): Promise<UIController & { disconnect(): void; acceptIntegration(notes: string): Promise<void> }> {
+export async function connectController(stateDir: string, sessionId: string): Promise<UIController & { disconnect(): void; acceptIntegration(notes: string): Promise<void>; adoptIntegration(keep?: boolean): Promise<void> }> {
   const socket = createConnection(socketPath(stateDir, sessionId));
   const pending = new Map<number, { resolve(value: unknown): void; reject(error: Error): void; timer: ReturnType<typeof setTimeout> }>();
   const listeners = new Set<() => void>();
@@ -162,6 +163,7 @@ export async function connectController(stateDir: string, sessionId: string): Pr
     async setPermissions(settings) { await request('setPermissions', [settings]); },
     async resolve(id, resolution) { await request('resolve', [id, resolution]); },
     async acceptIntegration(notes) { await request('acceptIntegration', [notes]); },
+    async adoptIntegration(keep) { await request('adoptIntegration', keep === undefined ? [] : [keep]); },
     async close() { try { await request('close'); } finally { disconnected = true; socket.destroy(); } },
     disconnect() { disconnected = true; socket.destroy(); },
   };

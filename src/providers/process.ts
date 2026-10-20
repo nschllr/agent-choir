@@ -2,15 +2,19 @@ import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { createInterface } from 'node:readline';
 import { SUPERVISOR_SOURCE } from './supervisor.js';
 
-export interface ProcessOptions { binary?: string; prefixArgs?: string[]; }
+/** Receives native stderr text when the user opted into a diagnostics log. */
+export type NativeDiagnostics = (text: string) => void;
+export interface ProcessOptions { binary?: string; prefixArgs?: string[]; diagnostics?: NativeDiagnostics }
+export interface JsonProcessOptions { jsonDocument?: boolean; diagnostics?: NativeDiagnostics }
 export function abortError(): Error { return new DOMException('Agent turn interrupted', 'AbortError'); }
-/** Native stderr is deliberately not surfaced: it can contain credentials or private configuration. */
+/** Native stderr is dropped unless the user explicitly opted into a diagnostics log: it can contain credentials or private configuration. */
 export class JsonProcess {
   readonly child: ChildProcessWithoutNullStreams;
   readonly closed: Promise<void>;
   private stopTimer?: NodeJS.Timeout;
   private exited = false;
-  constructor(binary: string, args: string[], cwd: string, onMessage: (message: any) => void, onError: (error: Error) => void, jsonDocument = false) {
+  constructor(binary: string, args: string[], cwd: string, onMessage: (message: any) => void, onError: (error: Error) => void, options: JsonProcessOptions = {}) {
+    const { jsonDocument = false, diagnostics } = options;
     this.child = spawn(process.execPath, ['-e', SUPERVISOR_SOURCE, binary, JSON.stringify(args)],
       { cwd, stdio: ['pipe', 'pipe', 'pipe', 'ipc'] }) as ChildProcessWithoutNullStreams;
     this.child.on('message', (message: any) => {
@@ -34,8 +38,8 @@ export class JsonProcess {
       });
       this.child.stdout.on('end', () => receive(document));
     }
-    // Drain without retaining potentially sensitive native diagnostics.
-    this.child.stderr.on('data', () => {});
+    // Drain stderr; retain it only for an explicit opt-in log.
+    this.child.stderr.on('data', chunk => diagnostics?.(chunk.toString()));
     this.child.stdin.on('error', () => onError(new Error('Native agent input stream closed unexpectedly')));
     this.child.on('error', (error: NodeJS.ErrnoException) => onError(new Error(error.code === 'ENOENT'
       ? `${binary} is not installed or not on PATH. Install it and sign in using its native CLI.`

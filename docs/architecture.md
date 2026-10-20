@@ -171,10 +171,16 @@ checkpoint. A clean candidate still requires the user's combined checks and
 `/accept` evidence. There is no automatic combined validator in this release and
 no automatic merge into the user's original branch.
 
-Worktrees are never removed automatically. Recovery can reconcile a worktree
-created before metadata save only when its repository, path, expected branch,
-stable base, and clean status match. Ambiguous orphan workspaces are preserved
-and reported instead of being reset or deleted.
+Adoption applies `git diff base..candidate` to the original checkout with
+`git apply`, which checks every preimage against the working tree first; a file
+changed since the snapshot refuses the whole patch. HEAD, the branch, and the index
+are untouched, so a dirty starting snapshot never gets committed on the user's
+behalf. Adoption then removes the session's worktrees, branches, and base ref
+unless the user keeps them; `--clean` and `--clean-all` do the same for sessions
+that were never adopted. Nothing is removed automatically. Recovery can reconcile
+a worktree created before metadata save only when its repository, path, expected
+branch, stable base, and clean status match. Ambiguous orphan workspaces are
+preserved and reported instead of being reset or deleted.
 
 ## Persistence and cancellation
 
@@ -246,7 +252,9 @@ cancellation is not transaction rollback.
 
 A separate supervisor owns native subprocesses. IPC disconnect triggers termination;
 Linux supervision tracks descendant processes and process birth identity to reduce
-accidental signaling of unrelated reused PIDs. This is process supervision, not a
+accidental signaling of unrelated reused PIDs. It rescans `/proc` twice a second
+and once more before signalling. Native stderr is drained and dropped unless the
+user opts into a private diagnostics log with `--native-log`. This is process supervision, not a
 complete cgroup/container boundary: arbitrarily daemonized descendants that escape
 observation remain a limitation. Native protocols, messages, and sessions are also
 subject to the providers' own lifecycle behavior.

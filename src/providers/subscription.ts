@@ -23,7 +23,7 @@ export async function requireClaudeSubscription(turn: ProviderTurn, options: Pro
   const process = new JsonProcess(options.binary ?? 'claude', [...(options.prefixArgs ?? []), 'auth', 'status'], turn.cwd, metadata => {
     if (metadata.authMethod === 'claude.ai' && metadata.loggedIn !== false) resolve();
     else reject(new Error('Agent Duet requires a Claude subscription login. Run claude auth login using your Claude subscription; API and alternate-provider authentication are unsupported.'));
-  }, reject, true);
+  }, reject, { jsonDocument: true, diagnostics: options.diagnostics });
   active.add(process);
   process.child.stdin.end();
   const abort = () => { reject(abortError()); process.stop(); };

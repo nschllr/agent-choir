@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { parseArgs } from 'node:util';
-import { closeSync, mkdirSync, openSync, realpathSync, statSync } from 'node:fs';
+import { closeSync, mkdirSync, openSync, realpathSync, statSync, writeSync } from 'node:fs';
+import { rm } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { execFileSync, spawn } from 'node:child_process';
@@ -10,7 +11,7 @@ import { ContextMemory } from './context-memory.js';
 import { DuetController } from './controller.js';
 import { GitWorkspaceManager } from './workspaces.js';
 import { DemoProvider } from './demo.js';
-import { ClaudeProvider, CodexProvider } from './providers/index.js';
+import { ClaudeProvider, CodexProvider, type NativeDiagnostics } from './providers/index.js';
 import { runTerminal } from './ui/terminal.js';
 import { resumeCommand } from './resume-command.js';
 import { validModel, claudeEfforts, codexEfforts } from './model-settings.js';
@@ -34,6 +35,8 @@ Usage:
   agent-duet --detach [other options]       Start an intentional background worker
   agent-duet --attach ID                    Reattach to a running worker
   agent-duet --list                         List saved sessions
+  agent-duet --adopt ID [--keep]            Apply an accepted candidate to the checkout, then clean up
+  agent-duet --clean ID | --clean-all       Remove session worktrees, branches and refs
   agent-duet --doctor                       Inspect local prerequisites, no model calls
 
 Options:
@@ -53,6 +56,8 @@ Options:
   --codex-model MODEL          Codex model ID (saved with session)
   --claude-effort LEVEL        Claude effort (low, medium, high, xhigh, max, default)
   --codex-effort LEVEL         Codex reasoning effort (saved with session)
+  --keep                       With --adopt: retain the session branches and worktrees
+  --native-log                 Append native CLI stderr to STATE_DIR/logs/native-SESSION.log (may contain private data)
 
 Controls:
   Ctrl+N add agent · Ctrl+G initial agent · Tab recipient · Ctrl+S steering
@@ -62,7 +67,7 @@ Controls:
   Ctrl+L session permissions · /permissions [read-only|project|full]
   Enter send · Alt+Enter/Ctrl+J newline · Ctrl+C pause/exit
   PgUp/PgDn scroll · Alt+Up/Down one line · Home/End oldest/latest · Ctrl+F scroll pane
-  /help /split /agent /collaborate [TASK] /chat /pause /resume /to /steer /resolve ID choice /accept evidence /detach /quit
+  /help /split /agent /collaborate [TASK] /chat /pause /resume /to /steer /resolve ID choice /accept evidence /adopt [keep] /detach /quit
 
 Native logins: run codex login and claude in your own terminal. Agent Duet never
 reads or copies credentials. Live sessions consume the providers' normal usage.
@@ -86,6 +91,42 @@ function doctor(): void {
   console.log('No logins inspected and no model requests made. Claude build mode requires native sandbox support; missing support fails closed.');
 }
 
+/** Opt-in native stderr capture. The file is private to the user and may contain anything the native CLI prints. */
+function nativeLog(stateDir: string, sessionId: string): (provider: ProviderKind) => NativeDiagnostics {
+  const logs = join(stateDir, 'logs'); mkdirSync(logs, { recursive: true, mode: 0o700 });
+  const fd = openSync(join(logs, `native-${sessionId}.log`), 'a', 0o600);
+  return provider => text => {
+    const at = new Date().toISOString();
+    const lines = text.split('\n').filter(line => line.trim()).map(line => `${at} [${provider}] ${line}\n`).join('');
+    try { if (lines) writeSync(fd, lines); } catch { /* Diagnostics never interrupt a turn. */ }
+  };
+}
+/** Sessions whose build is finished or never produced worktrees; unfinished builds are skipped unless named explicitly. */
+async function cleanSessions(store: SessionStore, stateDir: string, only: string | undefined): Promise<void> {
+  const workspaces = new GitWorkspaceManager(stateDir);
+  const ids = only ? [only] : store.list().map(s => s.id);
+  let cleaned = 0;
+  for (const id of ids) {
+    let release: (() => void) | undefined;
+    try {
+      release = store.acquire(id);
+      const session = store.load(id);
+      if (!session) throw new Error('Unknown session');
+      const tasks = session.decisions.find(d => d.kind === 'plan')?.tasks ?? [];
+      const unfinished = (session.integration && session.integration.status !== 'accepted') || tasks.some(t => !Object.hasOwn(session.completedTasks, t.id));
+      if (unfinished && !only) { console.log(`${id}  skipped: build not finished (use --clean ${id} to discard its worktrees)`); continue; }
+      const result = await workspaces.clean(session);
+      await rm(join(stateDir, 'context', id), { recursive: true, force: true });
+      cleaned++;
+      console.log(`${id}  removed ${result.removed.length} worktrees/branches/refs${result.warnings.length ? `; ${result.warnings.map(terminalText).join('; ')}` : ''}`);
+    } catch (error) {
+      console.log(`${id}  not cleaned: ${terminalText(error instanceof Error ? error.message : String(error))}`);
+      if (only) process.exitCode = 1;
+    } finally { release?.(); }
+  }
+  if (!only) console.log(cleaned ? `Cleaned ${cleaned} sessions.` : 'Nothing to clean.');
+}
+
 async function main(): Promise<void> {
   const { values, positionals } = parseArgs({ allowPositionals: true, options: {
     demo: { type: 'boolean' }, headless: { type: 'boolean' }, json: { type: 'boolean' }, help: { type: 'boolean', short: 'h' },
@@ -96,12 +137,15 @@ async function main(): Promise<void> {
     agent: { type: 'string' }, peer: { type: 'string' },
     permissions: { type: 'string' }, 'allow-dir': { type: 'string', multiple: true },
     collaborate: { type: 'boolean' },
+    adopt: { type: 'string' }, keep: { type: 'boolean' }, clean: { type: 'string' }, 'clean-all': { type: 'boolean' }, 'native-log': { type: 'boolean' },
   } });
   if (values.help) { console.log(HELP); return; }
   if (values.permissions !== undefined && !permissionModes.includes(values.permissions as PermissionSettings['mode'])) throw new Error('--permissions must be read-only, project, or full');
   if ((values['read-only'] || (values.scope !== undefined && values.scope !== 'build')) && values.permissions && values.permissions !== 'read-only') throw new Error('Read-only scope conflicts with writable --permissions');
   if (values.attach && (values.permissions || values['allow-dir'])) throw new Error('Use /permissions inside the attached session');
   if (values.doctor) { doctor(); return; }
+  if ([values.adopt, values.clean, values['clean-all'], values.resume, values.attach, values.worker].filter(Boolean).length > 1 || ((values.adopt || values.clean || values['clean-all']) && (positionals.length || values.brief || values.collaborate || values.project))) throw new Error('--adopt, --clean and --clean-all take only a session ID and --state-dir');
+  if (values.keep && !values.adopt) throw new Error('--keep only applies to --adopt');
   if (values.scope !== undefined && !['discuss', 'plan', 'build'].includes(values.scope)) throw new Error('Legacy --scope must be discuss, plan, or build; use --read-only to prevent edits');
   if (values['read-only'] && values.scope === 'build') throw new Error('--read-only cannot be combined with --scope build');
   if ((values.resume || values.attach || values.worker) && (values['read-only'] || values.scope !== undefined)) throw new Error('Use --permissions with --resume, or /permissions in the TUI, to change saved session permissions.');
@@ -130,14 +174,15 @@ async function main(): Promise<void> {
     return;
   }
   const store = new SessionStore(stateDir);
-  if (values.list) { try { console.log(values.json ? JSON.stringify(store.list(), null, 2) : store.list().map(s => `${s.id}  ${s.status.padEnd(12)} ${s.demo ? 'demo' : s.scope === 'build' ? 'edits enabled' : 'read-only'}  ${terminalText(s.brief).replace(/\n/g, ' ').slice(0, 70)}`).join('\n') || 'No saved sessions.'); } finally { store.close(); } return; }
+  if (values.clean || values['clean-all']) { try { await cleanSessions(store, stateDir, values.clean); } finally { store.close(); } return; }
+  if (values.list) { try { console.log(values.json ? JSON.stringify(store.list(), null, 2) : store.list().map(s => `${s.id}  ${s.status.padEnd(12)} ${s.demo ? 'demo' : s.scope === 'build' ? 'edits enabled' : 'read-only'}  ${terminalText(s.brief).replace(/\n/g, ' ').slice(0, 70)}\n    ${terminalText(s.project)}`).join('\n') || 'No saved sessions.'); } finally { store.close(); } return; }
   let release: (() => void) | undefined;
   let controller: DuetController | undefined;
   let server: Awaited<ReturnType<typeof serveController>> | undefined;
   let detachedNotice: string | undefined;
   const cleanup = async () => { await server?.close(); await controller?.close(); release?.(); store.close(); };
   try {
-    const resume = values.worker ?? values.resume;
+    const resume = values.worker ?? values.resume ?? values.adopt;
     let session;
     if (resume) {
       release = store.acquire(resume); session = store.load(resume);
@@ -166,12 +211,20 @@ async function main(): Promise<void> {
       session.providerEfforts = { ...session.providerEfforts, [provider]: selectedEfforts[provider] };
       for (const agent of sessionAgents(session).filter(agent => agent.provider === provider)) session.efforts = { ...session.efforts, [agent.id]: selectedEfforts[provider] };
     }
+    const diagnostics = values['native-log'] && !session.demo ? nativeLog(stateDir, session.id) : undefined;
     const factory = (agent: AgentConfig): AgentProvider => {
       if (session.demo) return new DemoProvider(agent.id);
-      const native = agent.provider === 'claude' ? new ClaudeProvider() : new CodexProvider();
+      const options = diagnostics ? { diagnostics: diagnostics(agent.provider) } : {};
+      const native = agent.provider === 'claude' ? new ClaudeProvider(options) : new CodexProvider(options);
       return { id: agent.id, run: native.run.bind(native), dispose: native.dispose.bind(native), listModels: native.listModels.bind(native) };
     };
     controller = new DuetController(session, Object.fromEntries(sessionAgents(session).map(agent => [agent.id, factory(agent)])), store, new GitWorkspaceManager(stateDir), factory, new ContextMemory(stateDir));
+    if (values.adopt) {
+      const before = controller.getView().session.messages.length;
+      await controller.adoptIntegration(values.keep === true);
+      for (const m of controller.getView().session.messages.slice(before)) if (m.from === 'system') console.log(terminalText(m.text));
+      return;
+    }
     if (values.permissions || values['allow-dir']) {
       const settings = sessionPermissions(session);
       await controller.setPermissions({ mode: (values.permissions as PermissionSettings['mode'] | undefined) ?? settings.mode, additionalDirectories: [...settings.additionalDirectories, ...(values['allow-dir'] ?? [])] });
@@ -181,7 +234,7 @@ async function main(): Promise<void> {
       await controller!.close(); release?.(); release = undefined; store.close();
       const logs = join(stateDir, 'logs'); mkdirSync(logs, { recursive: true, mode: 0o700 });
       const fd = openSync(join(logs, `${session.id}.log`), 'a', 0o600);
-      const child = spawn(process.execPath, [...process.execArgv, process.argv[1], '--worker', session.id, '--state-dir', stateDir, ...(autoStart ? ['--worker-start'] : [])], { detached: true, stdio: ['ignore', fd, fd], env: process.env });
+      const child = spawn(process.execPath, [...process.execArgv, process.argv[1], '--worker', session.id, '--state-dir', stateDir, ...(autoStart ? ['--worker-start'] : []), ...(values['native-log'] ? ['--native-log'] : [])], { detached: true, stdio: ['ignore', fd, fd], env: process.env });
       closeSync(fd);
       await new Promise<void>((resolve, reject) => { child.once('spawn', resolve); child.once('error', reject); }); child.unref();
       let ready = false;
