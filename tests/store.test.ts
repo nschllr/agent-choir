@@ -10,7 +10,7 @@ import { buildContextDelivery } from '../src/context-delivery.js';
 const directories: string[] = [];
 const stores: SessionStore[] = [];
 function fixture() {
-  const directory = mkdtempSync(join(tmpdir(), 'agent-duet-store-'));
+  const directory = mkdtempSync(join(tmpdir(), 'agent-choir-store-'));
   directories.push(directory);
   const store = new SessionStore(directory);
   stores.push(store);

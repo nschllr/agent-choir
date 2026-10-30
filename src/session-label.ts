@@ -11,5 +11,5 @@ const shorten = (text: string, limit: number) => {
 /** Deterministic native titles, independent of the protocol bootstrap prompt. */
 export function nativeSessionTitle(session: Session, agent: AgentId): string {
   const firstTask = session.messages.find(message => message.from === 'user')?.text || session.brief;
-  return `Agent duet · ${shorten(basename(session.project), 32) || 'Project'} · ${agentName(session, agent)} · ${shorten(firstTask, 64) || 'New chat'} · ${session.id.slice(0, 8)}`;
+  return `Agent choir · ${shorten(basename(session.project), 32) || 'Project'} · ${agentName(session, agent)} · ${shorten(firstTask, 64) || 'New chat'} · ${session.id.slice(0, 8)}`;
 }

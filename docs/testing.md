@@ -45,7 +45,7 @@ or the safety of all installed native configurations.
 
 ```sh
 npm run build
-node dist/cli.js --demo --headless --json --state-dir /tmp/agent-duet-smoke
+node dist/cli.js --demo --headless --json --state-dir /tmp/agent-choir-smoke
 npm run demo
 ```
 

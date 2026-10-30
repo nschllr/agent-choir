@@ -14,7 +14,7 @@ const runGit = async (cwd: string, args: string[], options: { index?: string; ra
     const env: NodeJS.ProcessEnv = { ...process.env, GIT_TERMINAL_PROMPT: '0', GIT_OPTIONAL_LOCKS: '0' };
     for (const key of ['GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE', 'GIT_COMMON_DIR', 'GIT_OBJECT_DIRECTORY', 'GIT_ALTERNATE_OBJECT_DIRECTORIES']) delete (env as NodeJS.ProcessEnv)[key];
     if (options.index) env.GIT_INDEX_FILE = options.index;
-    const result = await exec('git', ['-c', 'user.name=Agent Duet', '-c', 'user.email=agent-duet@localhost', '-c', 'core.hooksPath=/dev/null', '-c', 'commit.gpgSign=false', ...args], { cwd, maxBuffer: 8 * 1024 * 1024, env });
+    const result = await exec('git', ['-c', 'user.name=Agent Choir', '-c', 'user.email=agent-choir@localhost', '-c', 'core.hooksPath=/dev/null', '-c', 'commit.gpgSign=false', ...args], { cwd, maxBuffer: 8 * 1024 * 1024, env });
     return options.raw ? result.stdout : result.stdout.trim();
   } catch (error) {
     const e = error as { stderr?: string; message?: string };
@@ -49,7 +49,7 @@ export class GitWorkspaceManager implements WorkspaceManager {
       for (const name of [...agentIds(s), 'integration']) {
         const branch = name === 'integration' ? state.integration : state.agents[name];
         if (!branch) continue;
-        if (branch.path !== join(this.directory(s), name) || branch.branch !== `duet/${s.id}/${name}` || !Array.isArray(branch.completed) || branch.completed.some(id => typeof id !== 'string') || (branch.finalizedCommit !== undefined && !/^[0-9a-f]{40,64}$/.test(branch.finalizedCommit))) throw new Error('Invalid workspace branch metadata');
+        if (branch.path !== join(this.directory(s), name) || branch.branch !== `choir/${s.id}/${name}` || !Array.isArray(branch.completed) || branch.completed.some(id => typeof id !== 'string') || (branch.finalizedCommit !== undefined && !/^[0-9a-f]{40,64}$/.test(branch.finalizedCommit))) throw new Error('Invalid workspace branch metadata');
       }
       return state;
     } catch (error) {
@@ -67,7 +67,7 @@ export class GitWorkspaceManager implements WorkspaceManager {
   private async snapshot(s: Session, project: string, head: string): Promise<string> {
     // Keep the baseline reachable even if the process dies before workspace.json
     // is saved. A retry must not capture a different version of the user's files.
-    const ref = `refs/duet/${s.id}/base`;
+    const ref = `refs/choir/${s.id}/base`;
     let previous: string | undefined;
     try { previous = await git(project, 'rev-parse', '--verify', `${ref}^{commit}`); } catch { /* First preparation. */ }
     if (previous) return previous;
@@ -137,7 +137,7 @@ export class GitWorkspaceManager implements WorkspaceManager {
       }
       const tree = await indexed('write-tree');
       const base = tree === await git(project, 'rev-parse', `${head}^{tree}`) ? head
-        : await git(project, 'commit-tree', tree, '-p', head, '-m', `Agent Duet starting snapshot for ${s.id}`);
+        : await git(project, 'commit-tree', tree, '-p', head, '-m', `Agent Choir starting snapshot for ${s.id}`);
       await git(project, 'update-ref', ref, base, '0'.repeat(head.length));
       return base;
     } finally {
@@ -168,7 +168,7 @@ export class GitWorkspaceManager implements WorkspaceManager {
       if (current !== existing.branch) throw new Error(`Workspace branch changed unexpectedly: ${existing.path}`);
       return existing;
     }
-    const path = join(this.directory(s), name), branch = `duet/${s.id}/${name}`;
+    const path = join(this.directory(s), name), branch = `choir/${s.id}/${name}`;
     // Git creation and metadata replacement are separate durable operations. Reconcile
     // a fully created worktree after a crash between them instead of retrying -b.
     const fields = (await git(state.project, 'worktree', 'list', '--porcelain', '-z')).split('\0');
@@ -351,7 +351,7 @@ export class GitWorkspaceManager implements WorkspaceManager {
       if (project) { try { repository = await realpath(await git(project, 'rev-parse', '--show-toplevel')) === project; } catch { /* Not a repository any more. */ } }
       if (repository && project) {
         for (const name of [...agentIds(s), 'integration']) {
-          const path = join(directory, name), branch = `duet/${s.id}/${name}`;
+          const path = join(directory, name), branch = `choir/${s.id}/${name}`;
           const registered = (await git(project, 'worktree', 'list', '--porcelain', '-z')).split('\0').some(field => field.startsWith('worktree ') && resolve(field.slice(9)) === path);
           if (registered) {
             try { await git(project, 'worktree', 'remove', '--force', path); removed.push(path); }
@@ -364,7 +364,7 @@ export class GitWorkspaceManager implements WorkspaceManager {
             catch (error) { warnings.push(error instanceof Error ? error.message : String(error)); }
           }
         }
-        const ref = `refs/duet/${s.id}/base`;
+        const ref = `refs/choir/${s.id}/base`;
         try { await git(project, 'rev-parse', '--verify', '--quiet', ref); await git(project, 'update-ref', '-d', ref); removed.push(ref); } catch { /* Absent. */ }
         try { await git(project, 'worktree', 'prune'); } catch (error) { warnings.push(error instanceof Error ? error.message : String(error)); }
       } else warnings.push('The original repository is unavailable; its branches and refs were not removed');

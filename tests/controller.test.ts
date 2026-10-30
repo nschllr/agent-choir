@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { DuetController } from '../src/controller.js';
+import { ChoirController } from '../src/controller.js';
 import { createSession } from '../src/engine.js';
 import { limitUsage } from '../src/limits.js';
 import { HARNESS_INSTRUCTIONS } from '../src/context-policy.js';
@@ -29,14 +29,14 @@ class FakeProvider implements AgentProvider {
   }
 }
 
-const controllers: DuetController[] = [];
+const controllers: ChoirController[] = [];
 afterEach(async () => { for (const controller of controllers.splice(0)) await controller.close(); });
 function setup(session?: Session) {
   const claude = new FakeProvider('claude'), codex = new FakeProvider('codex');
   const saved: Session[] = [];
   const store = { save: vi.fn((value: Session) => { saved.push(structuredClone(value)); }) };
   const workspaces = { prepare: vi.fn(async (value: Session, agent: AgentId) => ({ cwd: `/tmp/${value.id}/${agent}`, writable: false })) };
-  const controller = new DuetController(session ?? createSession({ project: '/tmp/project', scope: 'discuss', brief: 'Compare designs', maxTurns: 8 }), { claude, codex }, store, workspaces);
+  const controller = new ChoirController(session ?? createSession({ project: '/tmp/project', scope: 'discuss', brief: 'Compare designs', maxTurns: 8 }), { claude, codex }, store, workspaces);
   controllers.push(controller);
   return { controller, claude, codex, saved, store, workspaces };
 }
@@ -131,7 +131,7 @@ describe('session permissions', () => {
     expect(codex.calls).toHaveLength(0);
     const resumed = setup(saved.at(-1));
     expect(resumed.controller.getView().session.permissions).toEqual({ mode: 'project', additionalDirectories: ['/tmp'] });
-    await expect(controller.setPermissions({ mode: 'full', additionalDirectories: ['/nonexistent/duet-directory'] })).rejects.toThrow();
+    await expect(controller.setPermissions({ mode: 'full', additionalDirectories: ['/nonexistent/choir-directory'] })).rejects.toThrow();
     expect(controller.getView().session.permissions?.mode).toBe('project');
   });
   it('stops active turns before downgrading and keeps work pending for explicit resume', async () => {
@@ -814,7 +814,7 @@ function setupSolo(brief = '') {
   const providers: Record<string, FakeProvider> = { 'agent-1': first };
   const factory = vi.fn((config: { id: string; provider: string }) => { const provider = new FakeProvider(config.id); providers[config.id] = provider; return provider; });
   const workspaces = { prepare: vi.fn(async () => ({ cwd: '/tmp/project', writable: false })) };
-  const controller = new DuetController(session, { 'agent-1': first }, { save: vi.fn() }, workspaces, factory);
+  const controller = new ChoirController(session, { 'agent-1': first }, { save: vi.fn() }, workspaces, factory);
   controllers.push(controller);
   return { controller, first, providers, factory };
 }
@@ -825,7 +825,7 @@ describe('dynamic agent instances', () => {
     session.integration = { status, path: '/tmp/candidate' };
     session.finished = { 'agent-1': 'Done' };
     const factory = vi.fn(() => new FakeProvider('agent-2'));
-    const controller = new DuetController(session, { 'agent-1': new FakeProvider('agent-1') }, { save() {} }, { async prepare() { return { cwd: '/tmp/project', writable: false }; } }, factory);
+    const controller = new ChoirController(session, { 'agent-1': new FakeProvider('agent-1') }, { save() {} }, { async prepare() { return { cwd: '/tmp/project', writable: false }; } }, factory);
     controllers.push(controller);
     const before = controller.getView().session;
     await expect(controller.addAgent('codex')).rejects.toThrow('Validate the pending integration');
@@ -836,7 +836,7 @@ describe('dynamic agent instances', () => {
     const session = createSession({ project: '/tmp/project', scope: 'build', brief: 'Build', agents: [{ id: 'agent-1', provider: 'codex' }] });
     session.integration = { status: 'accepted', path: '/tmp/candidate', notes: 'Validated' };
     session.decisions = [{ id: 'plan', kind: 'plan', title: 'Plan', proposal: 'Build', version: 1, tasks: [], positions: { 'agent-1': { version: 1, position: 'accept', reason: 'Ready' } }, rounds: 0, status: 'agreed' }];
-    const controller = new DuetController(session, { 'agent-1': new FakeProvider('agent-1') }, { save() {} }, { async prepare() { return { cwd: '/tmp/project', writable: false }; } }, () => new FakeProvider('agent-2'));
+    const controller = new ChoirController(session, { 'agent-1': new FakeProvider('agent-1') }, { save() {} }, { async prepare() { return { cwd: '/tmp/project', writable: false }; } }, () => new FakeProvider('agent-2'));
     controllers.push(controller);
     await controller.addAgent('codex');
     expect(controller.getView().session.integration).toBeUndefined();
@@ -917,7 +917,7 @@ describe('dynamic agent instances', () => {
     ];
     await controller.close();
     const peer = new FakeProvider('agent-2');
-    const restored = new DuetController(session, { 'agent-1': new FakeProvider('agent-1') }, { save() {} }, { async prepare() { return { cwd: '/tmp/project', writable: false }; } }, () => peer);
+    const restored = new ChoirController(session, { 'agent-1': new FakeProvider('agent-1') }, { save() {} }, { async prepare() { return { cwd: '/tmp/project', writable: false }; } }, () => peer);
     controllers.push(restored);
     await restored.addAgent('claude'); expect(peer.calls).toHaveLength(0);
     expect(restored.getView().session.decisions[0]).toMatchObject({ status: 'open', positions: {}, rounds: 0 });
@@ -957,7 +957,7 @@ describe('instance message routing', () => {
     const session = createSession({ project: '/tmp/project', scope: 'discuss', brief: 'Shared project context', agents: [{ id: 'agent-1', provider: 'codex' }, { id: 'agent-2', provider: 'codex' }] });
     session.messages.push({ id: 'one', at: '', from: 'agent-1', to: 'both', text: 'First thoughts' }, { id: 'two', at: '', from: 'agent-2', to: 'both', text: 'Second thoughts' });
     const first = new FakeProvider('agent-1'), second = new FakeProvider('agent-2');
-    const controller = new DuetController(session, { 'agent-1': first, 'agent-2': second }, { save() {} }, { async prepare() { return { cwd: '/tmp/project', writable: false }; } });
+    const controller = new ChoirController(session, { 'agent-1': first, 'agent-2': second }, { save() {} }, { async prepare() { return { cwd: '/tmp/project', writable: false }; } });
     controllers.push(controller);
     await controller.send('For the first instance only', 'agent-1');
     await controller.send('For the whole team', 'both');
@@ -979,7 +979,7 @@ it('keeps unresolved user checkpoints when a peer joins and reopens user-resolve
     { id: 'plan', kind: 'plan', title: 'Plan', proposal: 'Implement', version: 1, tasks: [], rounds: 0, status: 'agreed', positions: { 'agent-1': { position: 'accept', reason: 'Ready', version: 1 } }, userResolution: 'Use the small implementation' },
   ];
   const first = new FakeProvider('agent-1'), second = new FakeProvider('agent-2');
-  const controller = new DuetController(session, { 'agent-1': first }, { save() {} }, { async prepare() { return { cwd: '/tmp/project', writable: false }; } }, () => second);
+  const controller = new ChoirController(session, { 'agent-1': first }, { save() {} }, { async prepare() { return { cwd: '/tmp/project', writable: false }; } }, () => second);
   controllers.push(controller);
   await controller.addAgent('claude');
   expect(controller.getView().session.decisions[0]).toMatchObject({ status: 'waiting_user', rounds: 3, positions: { 'agent-1': { position: 'object' } } });
@@ -991,7 +991,7 @@ it('keeps unresolved user checkpoints when a peer joins and reopens user-resolve
 it('initially runs only the explicitly addressed instance in a blank dual conversation', async () => {
   const session = createSession({ project: '/tmp/project', scope: 'discuss', brief: '', agents: [{ id: 'agent-1', provider: 'codex' }, { id: 'agent-2', provider: 'claude' }] });
   const first = new FakeProvider('agent-1'), second = new FakeProvider('agent-2');
-  const controller = new DuetController(session, { 'agent-1': first, 'agent-2': second }, { save() {} }, { async prepare() { return { cwd: '/tmp/project', writable: false }; } });
+  const controller = new ChoirController(session, { 'agent-1': first, 'agent-2': second }, { save() {} }, { async prepare() { return { cwd: '/tmp/project', writable: false }; } });
   controllers.push(controller);
   await controller.send('Start with the second agent', 'agent-2');
   await expectCalls(second, 1);

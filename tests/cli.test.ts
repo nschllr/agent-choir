@@ -59,7 +59,7 @@ async function stopFixtureWorkers(directory: string) {
 
 describe('built CLI offline smoke', () => {
   it('answers a greeting only in the selected pane and collaborates only when explicitly requested', async () => {
-    const directory = await mkdtemp('/tmp/duet-cli-direct-');
+    const directory = await mkdtemp('/tmp/choir-cli-direct-');
     try {
       const args = ['--demo', '--agent', 'codex', '--peer', 'claude', '--headless', '--json', '--state-dir', directory];
       const direct = JSON.parse((await cli([...args, 'hi'])).stdout);
@@ -74,7 +74,7 @@ describe('built CLI offline smoke', () => {
     } finally { await rm(directory, { recursive: true, force: true }); }
   }, 20_000);
   it('cleans finished sessions and refuses to adopt without an accepted candidate', async () => {
-    const directory = await mkdtemp('/tmp/duet-cli-clean-');
+    const directory = await mkdtemp('/tmp/choir-cli-clean-');
     try {
       const session = JSON.parse((await cli(['--demo', '--headless', '--json', '--state-dir', directory])).stdout);
       expect(session.status).toBe('complete');
@@ -92,7 +92,7 @@ describe('built CLI offline smoke', () => {
     } finally { await rm(directory, { recursive: true, force: true }); }
   }, 20_000);
   it.skipIf(!hasPythonPty).each(['interactive', 'headless', 'empty', 'read-only'] as const)('opens directly into %s execution', async mode => {
-    const directory = await mkdtemp('/tmp/duet-cli-start-');
+    const directory = await mkdtemp('/tmp/choir-cli-start-');
     try {
       const args = mode === 'headless' ? ['--demo', '--headless', '--json'] : mode === 'interactive' ? ['--demo', '--agent', 'codex'] : mode === 'read-only' ? ['--read-only'] : [];
       // Authentication guards ensure even a startup regression cannot call a real provider.
@@ -112,7 +112,7 @@ describe('built CLI offline smoke', () => {
   }, 25_000);
 
   it('rejects conflicting permissions and preserves legacy read-only sessions on resume', async () => {
-    const directory = await mkdtemp('/tmp/duet-cli-permissions-');
+    const directory = await mkdtemp('/tmp/choir-cli-permissions-');
     try {
       expect((await cli(['--help'])).stdout).toContain('--read-only');
       await expect(cli(['--read-only', '--scope', 'build', '--state-dir', directory])).rejects.toMatchObject({ stderr: expect.stringContaining('cannot be combined') });
@@ -127,7 +127,7 @@ describe('built CLI offline smoke', () => {
     } finally { await rm(directory, { recursive: true, force: true }); }
   });
   it('changes a saved read-only session to full or project access without starting completed work', async () => {
-    const directory = await mkdtemp('/tmp/duet-cli-permission-upgrade-');
+    const directory = await mkdtemp('/tmp/choir-cli-permission-upgrade-');
     try {
       const session = createSession({ project: '/tmp', brief: 'Earlier work', scope: 'discuss', agents: [{ id: 'codex', provider: 'codex' }] });
       session.status = 'complete';
@@ -144,7 +144,7 @@ describe('built CLI offline smoke', () => {
   });
 
   it('explains implicit headless execution without contaminating JSON output', async () => {
-    const directory = await mkdtemp('/tmp/duet-cli-non-tty-');
+    const directory = await mkdtemp('/tmp/choir-cli-non-tty-');
     try {
       const inferred = await cli(['--demo', '--json', '--state-dir', directory]);
       expect(inferred.stderr).toContain('output is not an interactive terminal');
@@ -157,7 +157,7 @@ describe('built CLI offline smoke', () => {
   }, 15_000);
 
   it('persists explicit models, preserves them on resume, and allows a single-provider override', async () => {
-    const directory = await mkdtemp('/tmp/duet-cli-models-');
+    const directory = await mkdtemp('/tmp/choir-cli-models-');
     try {
       const created = JSON.parse((await cli(['--demo', '--headless', '--json', '--state-dir', directory, '--claude-model', 'haiku', '--codex-model', 'test-codex-model', '--claude-effort', 'low', '--codex-effort', 'high'])).stdout);
       expect(created.models).toEqual({ claude: 'haiku', codex: 'test-codex-model' });
@@ -177,7 +177,7 @@ describe('built CLI offline smoke', () => {
   }, 20_000);
 
   it('supports help, persisted headless results, listing, detach, reconnect, and remote pause', async () => {
-    const directory = await mkdtemp('/tmp/duet-cli-');
+    const directory = await mkdtemp('/tmp/choir-cli-');
     let remote: Awaited<ReturnType<typeof connectController>> | undefined;
     try {
       expect((await cli(['--help'])).stdout).toContain('--detach');
@@ -209,7 +209,7 @@ describe('built CLI offline smoke', () => {
     }
   }, 25_000);
   it.each(['waiting_user', 'integration'] as const)('detaches a saved %s checkpoint without starting agent turns', async checkpoint => {
-    const directory = await mkdtemp('/tmp/duet-cli-checkpoint-');
+    const directory = await mkdtemp('/tmp/choir-cli-checkpoint-');
     let remote: Awaited<ReturnType<typeof connectController>> | undefined;
     try {
       const session = createSession({ project: '/tmp', scope: checkpoint === 'integration' ? 'build' : 'discuss', brief: 'Preserve this user checkpoint', demo: true });

@@ -8,7 +8,7 @@ import { createSession } from '../src/engine.js';
 const directories: string[] = [];
 afterEach(async () => { await Promise.all(directories.splice(0).map(path => rm(path, { recursive: true, force: true }))); });
 async function fixture() {
-  const root = await mkdtemp(join(tmpdir(), 'agent-duet-context-'));
+  const root = await mkdtemp(join(tmpdir(), 'agent-choir-context-'));
   directories.push(root);
   const project = join(root, 'project');
   await mkdir(join(project, '.agent'), { recursive: true });

@@ -10,7 +10,7 @@ import type { UIController, ViewState } from '../src/types.js';
 const cleanups: (() => Promise<void>)[] = [];
 afterEach(async () => { for (const cleanup of cleanups.reverse()) await cleanup(); cleanups.length = 0; });
 async function setup(instances = false) {
-  const directory = await mkdtemp('/tmp/duet-background-');
+  const directory = await mkdtemp('/tmp/choir-background-');
   cleanups.push(() => rm(directory, { recursive: true, force: true }));
   const view: ViewState = { session: createSession({ project: '/tmp/project', scope: 'discuss', brief: 'Brainstorm' }), streams: { claude: '', codex: '' }, busy: { claude: false, codex: false }, recipient: 'both', delivery: 'queued' };
   if (instances) { view.session.agents = [{ id: 'agent-1', provider: 'codex' }]; view.streams = { 'agent-1': '' }; view.busy = { 'agent-1': false }; view.recipient = 'agent-1'; }

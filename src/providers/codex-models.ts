@@ -30,7 +30,7 @@ export async function codexModelCatalog(cwd: string, options: ProcessOptions, ac
     const id = ++sequence; pending.set(id, { resolve, reject }); native.write({ id, method, params });
   });
   try {
-    await request('initialize', { clientInfo: { name: 'agent-duet', version: '0.1.0' }, capabilities: null });
+    await request('initialize', { clientInfo: { name: 'agent-choir', version: '0.1.0' }, capabilities: null });
     native.write({ method: 'initialized', params: {} });
     const config = await request('config/read', { cwd, includeLayers: false });
     const models: ModelOption[] = [], cursors = new Set<string>();

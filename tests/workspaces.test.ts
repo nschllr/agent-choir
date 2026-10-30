@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { GitWorkspaceManager } from '../src/workspaces.js';
-import { DuetController } from '../src/controller.js';
+import { ChoirController } from '../src/controller.js';
 import { SessionStore } from '../src/store.js';
 import { createSession } from '../src/engine.js';
 import type { Session, TaskSpec } from '../src/types.js';
@@ -13,7 +13,7 @@ import type { Session, TaskSpec } from '../src/types.js';
 const exec = promisify(execFile), dirs: string[] = [];
 const git = async (cwd: string, ...args: string[]) => (await exec('git', ['-c', 'user.name=Tests', '-c', 'user.email=tests@localhost', '-c', 'commit.gpgSign=false', ...args], { cwd })).stdout.trim();
 async function fixture(tasks?: TaskSpec[]) {
-  const root = await mkdtemp(join(tmpdir(), 'duet-workspaces-')); dirs.push(root);
+  const root = await mkdtemp(join(tmpdir(), 'choir-workspaces-')); dirs.push(root);
   const project = join(root, 'project'); await mkdir(project);
   await git(project, 'init', '-b', 'main');
   await writeFile(join(project, 'shared.txt'), 'original\n');
@@ -39,7 +39,7 @@ describe('isolated build workspaces', () => {
     await f.manager.finalize(f.s, 'claude'); await f.manager.finalize(f.s, 'codex');
     f.s.finished = { claude: 'Done', codex: 'Done' }; f.s.integration = { status: 'pending' }; f.s.status = 'paused';
     const store = new SessionStore(join(f.root, 'sessions'));
-    const controller = new DuetController(f.s, {
+    const controller = new ChoirController(f.s, {
       claude: { id: 'claude', async dispose() {}, async run(turn) {
         expect(turn.writable).toBe(true);
         expect(turn.cwd).not.toBe(f.project);
@@ -160,7 +160,7 @@ describe('isolated build workspaces', () => {
     await writeFile(join(f.project, 'shared.txt'), 'snapshot before crash\n');
     const first = await f.manager.prepare(f.s, 'claude');
     const baseline = await git(first.cwd, 'rev-parse', 'HEAD');
-    expect(await git(f.project, 'rev-parse', `refs/duet/${f.s.id}/base`)).toBe(baseline);
+    expect(await git(f.project, 'rev-parse', `refs/choir/${f.s.id}/base`)).toBe(baseline);
     await rm(join(f.stateDir, 'worktrees', f.s.id, 'workspace.json'));
     await writeFile(join(f.project, 'shared.txt'), 'later user changes\n');
     const restarted = new GitWorkspaceManager(f.stateDir);
@@ -363,7 +363,7 @@ describe('isolated build workspaces', () => {
     const integrated = await f.manager.merge(f.s);
     f.s.integration = { status: 'accepted', path: integrated.path, revision: integrated.revision };
     const adopted = await f.manager.adopt(f.s);
-    expect(adopted).toMatchObject({ revision: integrated.revision, branch: `duet/${f.s.id}/integration` });
+    expect(adopted).toMatchObject({ revision: integrated.revision, branch: `choir/${f.s.id}/integration` });
     expect([...adopted.files].sort()).toEqual(['claude.txt', 'shared.txt']);
     expect(await git(f.project, 'rev-parse', 'HEAD')).toBe(f.base);
     expect(await git(f.project, 'branch', '--show-current')).toBe('main');
@@ -372,9 +372,9 @@ describe('isolated build workspaces', () => {
     expect(await readFile(join(f.project, 'shared.txt'), 'utf8')).toBe('original\nCodex line\n');
     const cleaned = await f.manager.clean(f.s);
     expect(cleaned.warnings).toEqual([]);
-    expect(cleaned.removed).toEqual(expect.arrayContaining([`duet/${f.s.id}/claude`, `duet/${f.s.id}/codex`, `duet/${f.s.id}/integration`, `refs/duet/${f.s.id}/base`]));
-    expect(await git(f.project, 'branch', '--list', 'duet/*')).toBe('');
-    expect(await git(f.project, 'for-each-ref', 'refs/duet')).toBe('');
+    expect(cleaned.removed).toEqual(expect.arrayContaining([`choir/${f.s.id}/claude`, `choir/${f.s.id}/codex`, `choir/${f.s.id}/integration`, `refs/choir/${f.s.id}/base`]));
+    expect(await git(f.project, 'branch', '--list', 'choir/*')).toBe('');
+    expect(await git(f.project, 'for-each-ref', 'refs/choir')).toBe('');
     expect((await git(f.project, 'worktree', 'list', '--porcelain')).match(/^worktree /gm)).toHaveLength(1);
     await expect(readFile(join(f.stateDir, 'worktrees', f.s.id, 'workspace.json'))).rejects.toMatchObject({ code: 'ENOENT' });
     // The user's adopted changes survive cleanup.
@@ -393,7 +393,7 @@ describe('isolated build workspaces', () => {
     await expect(f.manager.adopt(f.s)).rejects.toThrow('does not apply cleanly');
     expect(await readFile(join(f.project, 'shared.txt'), 'utf8')).toBe('user edit after snapshot\n');
     await expect(readFile(join(f.project, 'claude.txt'))).rejects.toMatchObject({ code: 'ENOENT' });
-    expect(await git(f.project, 'branch', '--list', `duet/${f.s.id}/integration`)).toContain('integration');
+    expect(await git(f.project, 'branch', '--list', `choir/${f.s.id}/integration`)).toContain('integration');
   });
   it('adopts on top of a dirty starting snapshot without committing the user\'s own changes', async () => {
     const f = await fixture([{ id: 'a', owner: 'claude', description: 'a', dependsOn: [] }]);
@@ -503,8 +503,8 @@ it('isolates same-provider instances and integrates their dependency commits', a
   const second = await f.manager.prepare(f.s, 'agent-2');
   expect(second.cwd).not.toBe(first.cwd);
   expect(await readFile(join(second.cwd, 'api.txt'), 'utf8')).toBe('API');
-  expect(await git(first.cwd, 'branch', '--show-current')).toBe(`duet/${f.s.id}/agent-1`);
-  expect(await git(second.cwd, 'branch', '--show-current')).toBe(`duet/${f.s.id}/agent-2`);
+  expect(await git(first.cwd, 'branch', '--show-current')).toBe(`choir/${f.s.id}/agent-1`);
+  expect(await git(second.cwd, 'branch', '--show-current')).toBe(`choir/${f.s.id}/agent-2`);
   await writeFile(join(second.cwd, 'client.txt'), 'Client');
   f.s.completedTasks.b = 'done';
   await f.manager.finalize(f.s, 'agent-2');

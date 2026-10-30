@@ -41,7 +41,7 @@ export class CodexProvider implements AgentProvider {
       }
       if ('id' in message && message.method) {
         // Never silently authorize approvals, dynamic tools, or unexpected interactive requests.
-        process.write({ id: message.id, error: { code: -32601, message: 'Interactive requests are unavailable in Agent Duet' } });
+        process.write({ id: message.id, error: { code: -32601, message: 'Interactive requests are unavailable in Agent Choir' } });
         fail(new Error(`Codex requested unsupported interaction: ${String(message.method)}`)); return;
       }
       const p = message.params ?? {};
@@ -87,11 +87,11 @@ export class CodexProvider implements AgentProvider {
     // Attach immediately so setup errors cannot leave an unhandled rejection.
     void result.catch(() => {});
     try {
-      await request('initialize', { clientInfo: { name: 'agent-duet', version: '0.1.0' }, capabilities: null });
+      await request('initialize', { clientInfo: { name: 'agent-choir', version: '0.1.0' }, capabilities: null });
       process.write({ method: 'initialized', params: {} });
       const authentication = await request('account/read', { refreshToken: false });
       if (authentication.account?.type !== 'chatgpt') {
-        throw new Error('Agent Duet requires a ChatGPT subscription login. Run codex login using your ChatGPT account; API and alternate-provider authentication are unsupported.');
+        throw new Error('Agent Choir requires a ChatGPT subscription login. Run codex login using your ChatGPT account; API and alternate-provider authentication are unsupported.');
       }
       // MCP servers execute outside the file sandbox. Refuse rather than claiming
       // that shell isolation also protects third-party tools. No config is mutated.
@@ -101,10 +101,10 @@ export class CodexProvider implements AgentProvider {
         throw new Error('Subscription mode requires the native OpenAI model provider. Select it in your Codex configuration before continuing.');
       }
       if (Object.values(effective.config.mcp_servers ?? {}).some((server: any) => server?.enabled !== false)) {
-        throw new Error('Agent Duet cannot isolate configured Codex MCP servers. Disable them in native Codex configuration for this project before continuing.');
+        throw new Error('Agent Choir cannot isolate configured Codex MCP servers. Disable them in native Codex configuration for this project before continuing.');
       }
       if (effective.config.hooks && Object.keys(effective.config.hooks).length) {
-        throw new Error('Agent Duet cannot isolate configured Codex hooks. Disable them in native Codex configuration for this project before continuing.');
+        throw new Error('Agent Choir cannot isolate configured Codex hooks. Disable them in native Codex configuration for this project before continuing.');
       }
       let model = turn.model ?? undefined, effort = turn.effort ?? undefined;
       if (turn.model === null || turn.effort === null) {

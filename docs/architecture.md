@@ -1,13 +1,13 @@
 # Architecture
 
-Agent Duet separates terminal presentation, deterministic coordination, native
+Agent Choir separates terminal presentation, deterministic coordination, native
 provider execution, and Git workspace operations. Models reason about the task;
 the coordinator validates their declared positions and allowed state transitions.
 
 ```text
 Ink terminal / headless CLI / attached terminal
                     |
-             DuetController
+             ChoirController
              /     |      \
        protocol  SQLite   GitWorkspaceManager
           /        state       |
@@ -148,7 +148,7 @@ for a subscription login before starting a model turn.
 ## Workspace lifecycle
 
 First build preparation records the clean original repository's HEAD. Agent branches
-`duet/SESSION_ID/INSTANCE_ID` start from that stable base, independent of provider.
+`choir/SESSION_ID/INSTANCE_ID` start from that stable base, independent of provider.
 Worktrees live under `STATE_DIR/worktrees/SESSION_ID/`. The original checkout,
 branch, and files remain unchanged; Git registers the additional worktrees.
 

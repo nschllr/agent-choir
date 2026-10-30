@@ -1,4 +1,4 @@
-# Agent Duet guide
+# Agent Choir guide
 
 The complete reference for running sessions. The [README](../README.md) has the
 short version; [architecture](architecture.md) explains the design.
@@ -16,10 +16,10 @@ claude
 node dist/cli.js --doctor
 ```
 
-Install each provider you intend to use on `PATH`. Agent Duet starts the unmodified native
+Install each provider you intend to use on `PATH`. Agent Choir starts the unmodified native
 programs and resumes their native sessions. It does not offer its own login,
 extract tokens, broker credentials, or make direct model API requests. The native
-CLI owns the active account. Before starting model work, Agent Duet checks native
+CLI owns the active account. Before starting model work, Agent Choir checks native
 authentication metadata for a ChatGPT/Claude subscription login and rejects known
 API-key or alternate-inference environment overrides. Incompatible or missing
 metadata fails explicitly; it never silently falls back to API billing. These
@@ -33,7 +33,7 @@ native Bash sandbox support, including `bwrap` and `socat`; follow the
 incompatible sandbox support fails the turn instead of allowing an unsandboxed
 fallback. `--doctor` checks binaries without inspecting credentials or calling models.
 
-External native tools can escape an ordinary shell sandbox. Agent Duet therefore
+External native tools can escape an ordinary shell sandbox. Agent Choir therefore
 disables Claude hooks/MCP and limits its tools; read-only Claude turns have no Bash,
 Edit, or Write tools. Project-mode writes use sandboxed Bash. Full access enables
 Claude Bash/Edit/Write without the filesystem/network sandbox. Codex uses the
@@ -43,7 +43,7 @@ effective configuration containing enabled MCP servers or configured hooks.
 For an isolation error, use a dedicated project/native configuration without
 those integrations and check the effective native configuration for that project.
 Keep unrelated global workflows intact. Configuration overrides must also apply
-to generated worktree paths, since collaboration implementation runs there. Agent Duet does not
+to generated worktree paths, since collaboration implementation runs there. Agent Choir does not
 rewrite your native configuration. CLI incompatibilities or interactive approval
 requests produce an explicit error; they are not silently approved.
 
@@ -156,7 +156,7 @@ and `--codex-effort LEVEL` set saved defaults for instances of that provider;
 `default` clears an effort override. For example:
 
 ```sh
-agent-duet --agent codex --codex-model MODEL_ID --codex-effort high
+agent-choir --agent codex --codex-model MODEL_ID --codex-effort high
 ```
 
 For the inexpensive model used in the live smoke test, pin
@@ -215,9 +215,9 @@ Settings persist through restart and background attachment. Full access is expli
 never the default; it does not enable additional hooks, MCP servers, or native subagents.
 
 ```sh
-agent-duet --resume SESSION_ID --permissions project
-agent-duet --permissions full
-agent-duet --allow-dir ../shared
+agent-choir --resume SESSION_ID --permissions project
+agent-choir --permissions full
+agent-choir --allow-dir ../shared
 ```
 
 ## Terminal controls
@@ -372,7 +372,7 @@ native peers are available. Legacy/manual adapters and single-peer checkpoints r
 
 ## Adopting results and cleaning up
 
-An accepted candidate lives on the `duet/SESSION_ID/integration` branch in a
+An accepted candidate lives on the `choir/SESSION_ID/integration` branch in a
 separate worktree. `/adopt` applies the difference between the starting snapshot
 and that candidate to your original checkout as **uncommitted changes**. Your
 branch, `HEAD`, and index stay unchanged, so you review the result with `git diff`
@@ -385,8 +385,8 @@ commits are not carried over; inspect the integration branch first if you want t
 ```
 
 ```sh
-agent-duet --adopt SESSION_ID
-agent-duet --adopt SESSION_ID --keep
+agent-choir --adopt SESSION_ID
+agent-choir --adopt SESSION_ID --keep
 ```
 
 Adoption requires the session to be paused and the candidate to be accepted. The
@@ -397,16 +397,16 @@ integration branch by hand. A dirty starting snapshot is fine; the patch contain
 only what the agents changed on top of it, and your own uncommitted edits remain
 uncommitted.
 
-After a successful adoption the session's worktrees, `duet/SESSION_ID/*` branches,
-and the private `refs/duet/SESSION_ID/base` ref are removed. `/adopt keep` or
+After a successful adoption the session's worktrees, `choir/SESSION_ID/*` branches,
+and the private `refs/choir/SESSION_ID/base` ref are removed. `/adopt keep` or
 `--keep` retains them for later inspection. Cleanup discards any worktree edits
 that were never finalized into a task commit.
 
 Sessions you never adopt can be cleaned explicitly:
 
 ```sh
-agent-duet --clean SESSION_ID
-agent-duet --clean-all
+agent-choir --clean SESSION_ID
+agent-choir --clean-all
 ```
 
 `--clean-all` removes workspaces of sessions whose build finished or that never
@@ -448,8 +448,8 @@ session. Local sessions use `--resume`; attached/background sessions use `--atta
 The command includes the absolute launcher and state paths, including development
 loaders when started through `npm run dev`, so it works from another directory.
 
-Native peer chats receive descriptive names starting with `Agent duet`, for example
-`Agent duet · search · Codex 1 · Design search suggestions · 61ea67d1`.
+Native peer chats receive descriptive names starting with `Agent choir`, for example
+`Agent choir · search · Codex 1 · Design search suggestions · 61ea67d1`.
 Names use the project, peer name, first user message, and short harness session ID;
 they require no extra model call. Titles are applied when each peer next runs,
 including resumed chats. Two peers of the same provider retain distinct names.
@@ -476,8 +476,8 @@ configured limits; agents never renew their own allowance.
 Startup flags `--max-turns N` and `--max-minutes N` set the same limits. These are
 scheduling limits, not exact token or monetary budgets.
 
-State lives in `$XDG_STATE_HOME/agent-duet`, or
-`~/.local/state/agent-duet` when XDG_STATE_HOME is unset. Override with
+State lives in `$XDG_STATE_HOME/agent-choir`, or
+`~/.local/state/agent-choir` when XDG_STATE_HOME is unset. Override with
 `--state-dir /absolute/path`. It contains private SQLite session snapshots,
 ownership locks, worktree metadata, background sockets, and worker logs. Keep it
 outside the project repository and exclude it from publication. Private filesystem
@@ -507,7 +507,7 @@ peer completion summaries are tracked independently, so a new peer summary does
 not resend unchanged empty task lists. The harness does **not compact conversations
 each turn** or resend the transcript on every exchange.
 
-Agent Duet maintains a private context directory at
+Agent Choir maintains a private context directory at
 `STATE_DIR/context/SESSION_ID/.agent/` containing `INSTRUCTIONS.md`,
 `environment.md`, `shared-state.md`, `decisions.md`, and `task-board.md`.
 `handoff.md` appears when there are completed tasks or a decision/integration

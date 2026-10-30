@@ -1,4 +1,4 @@
-# Agent Duet implementation plan
+# Agent Choir implementation plan
 
 Build a local, subscription-backed terminal workspace for two equal coding agents.
 Sessions support discussion, planning, and implementation by default, with an

@@ -1,4 +1,4 @@
-# Agent Duet
+# Agent Choir
 
 A local terminal workspace that starts with one agent and adds a second when you
 want a peer. Choose Codex or Claude for each pane, including two instances of the
@@ -6,6 +6,10 @@ same provider. Agents brainstorm, make explicit decisions, and work on the same
 project as equal peers. Discuss, plan, and implement in one session; use `--read-only`
 when you want to prevent edits. You settle unresolved decisions. The coordinator is
 ordinary software, not a third model judging their conversation.
+
+![Codex and Claude side by side: Codex writes and runs a small script, then Claude assesses it when asked to discuss improvements](agent-choir-01.png)
+
+![Collaboration mode: the agents converge on improvements, flag a remaining disagreement for the user, and wait for the next message](agent-choir-03.png)
 
 This is an initial implementation for Linux. Real Claude/Codex smoke tests have
 completed an autonomous discussion and a small build with shared task dependencies.
@@ -28,7 +32,7 @@ and never edits the selected project. `node dist/cli.js --demo --headless --json
 prints the final state without a terminal UI.
 
 There is no published npm package yet. Invoke `node dist/cli.js` after building,
-or use `npm run dev --` during development. Examples using `agent-duet` assume you
+or use `npm run dev --` during development. Examples using `agent-choir` assume you
 have made that executable available yourself.
 
 ## Quick start with native agents
@@ -44,7 +48,7 @@ claude
 node dist/cli.js --doctor
 ```
 
-Agent Duet starts the unmodified native programs and resumes their native sessions.
+Agent Choir starts the unmodified native programs and resumes their native sessions.
 It never brokers credentials or calls model APIs directly; it refuses API-key and
 alternate-provider environments rather than falling back to API billing. Claude
 project-mode writes need the native Bash sandbox (`bwrap` and `socat`).
@@ -93,7 +97,7 @@ This typechecks, builds, and runs offline unit/integration tests. See
 [testing](docs/testing.md) for coverage, an offline smoke test, and the separate
 real-provider acceptance exercise.
 
-Original Agent Duet source is MIT licensed. No source from another harness was
+Original Agent Choir source is MIT licensed. No source from another harness was
 copied.
 The `.agent/` layout and separation of durable facts, environment knowledge,
 decisions, tasks, and handoffs were informed by

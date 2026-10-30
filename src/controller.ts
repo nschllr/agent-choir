@@ -30,7 +30,7 @@ interface Workspaces extends WorkspaceManager {
   adopt?(session: Session): Promise<AdoptionResult>;
   clean?(session: Session): Promise<CleanupResult>;
 }
-export class DuetController implements UIController {
+export class ChoirController implements UIController {
   private catalogs = new Map<AgentId, Promise<ModelCatalog>>();
   private state: ViewState;
   private listeners = new Set<() => void>();

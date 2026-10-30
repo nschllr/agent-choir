@@ -1,12 +1,12 @@
 {
-  "name": "agent-duet",
+  "name": "agent-choir",
   "version": "0.1.0",
   "private": true,
   "description": "Two equal coding agents, one local terminal workspace",
   "type": "module",
   "license": "MIT",
   "engines": { "node": ">=24.0.0" },
-  "bin": { "agent-duet": "dist/cli.js" },
+  "bin": { "agent-choir": "dist/cli.js" },
   "scripts": {
     "dev": "tsx src/cli.tsx",
     "demo": "tsx src/cli.tsx --demo",

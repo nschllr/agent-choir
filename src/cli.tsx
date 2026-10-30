@@ -8,7 +8,7 @@ import { execFileSync, spawn } from 'node:child_process';
 import { createSession } from './engine.js';
 import { SessionStore } from './store.js';
 import { ContextMemory } from './context-memory.js';
-import { DuetController } from './controller.js';
+import { ChoirController } from './controller.js';
 import { GitWorkspaceManager } from './workspaces.js';
 import { DemoProvider } from './demo.js';
 import { ClaudeProvider, CodexProvider, type NativeDiagnostics } from './providers/index.js';
@@ -22,22 +22,22 @@ import { terminalText } from './ui/text.js';
 import { connectController, serveController } from './background.js';
 import type { AgentConfig, AgentProvider, ProviderKind, Scope, UIController } from './types.js';
 
-const HELP = `Agent Duet — two equal agents, one local workspace
+const HELP = `Agent Choir — two equal agents, one local workspace
 
 Usage:
-  agent-duet                                Open an empty Codex chat
-  agent-duet --agent claude                  Start with Claude instead
-  agent-duet --agent codex --peer codex      Open two separate Codex instances
-  agent-duet --demo                         Offline, clearly labelled simulation
-  agent-duet --project PATH "Discuss, plan, or implement a feature"
-  agent-duet --read-only "Explore an approach without editing files"
-  agent-duet --resume ID                    Open a saved session, paused
-  agent-duet --detach [other options]       Start an intentional background worker
-  agent-duet --attach ID                    Reattach to a running worker
-  agent-duet --list                         List saved sessions
-  agent-duet --adopt ID [--keep]            Apply an accepted candidate to the checkout, then clean up
-  agent-duet --clean ID | --clean-all       Remove session worktrees, branches and refs
-  agent-duet --doctor                       Inspect local prerequisites, no model calls
+  agent-choir                                Open an empty Codex chat
+  agent-choir --agent claude                  Start with Claude instead
+  agent-choir --agent codex --peer codex      Open two separate Codex instances
+  agent-choir --demo                         Offline, clearly labelled simulation
+  agent-choir --project PATH "Discuss, plan, or implement a feature"
+  agent-choir --read-only "Explore an approach without editing files"
+  agent-choir --resume ID                    Open a saved session, paused
+  agent-choir --detach [other options]       Start an intentional background worker
+  agent-choir --attach ID                    Reattach to a running worker
+  agent-choir --list                         List saved sessions
+  agent-choir --adopt ID [--keep]            Apply an accepted candidate to the checkout, then clean up
+  agent-choir --clean ID | --clean-all       Remove session worktrees, branches and refs
+  agent-choir --doctor                       Inspect local prerequisites, no model calls
 
 Options:
   --read-only                 Prevent project edits (default permits direct project editing)
@@ -69,7 +69,7 @@ Controls:
   PgUp/PgDn scroll · Alt+Up/Down one line · Home/End oldest/latest · Ctrl+F scroll pane
   /help /split /agent /collaborate [TASK] /chat /pause /resume /to /steer /resolve ID choice /accept evidence /adopt [keep] /detach /quit
 
-Native logins: run codex login and claude in your own terminal. Agent Duet never
+Native logins: run codex login and claude in your own terminal. Agent Choir never
 reads or copies credentials. Live sessions consume the providers' normal usage.
 Build work remains on isolated branches; combined validation is a user checkpoint.
 `;
@@ -83,7 +83,7 @@ function modelOption(value: string | undefined, label: string): string | undefin
   return value;
 }
 function doctor(): void {
-  console.log(`Agent Duet · Node ${process.version} · ${process.platform}`);
+  console.log(`Agent Choir · Node ${process.version} · ${process.platform}`);
   for (const [binary, args] of [['codex', ['--version']], ['claude', ['--version']], ['git', ['--version']], ['bwrap', ['--version']], ['socat', ['-V']]] as const) {
     try { const result = execFileSync(binary, [...args], { encoding: 'utf8', timeout: 5000, stdio: ['ignore', 'pipe', 'pipe'] }); console.log(`${binary}: ${terminalText(result.split('\n')[0])}`); }
     catch { console.log(`${binary}: unavailable (or cannot execute in this environment)`); }
@@ -163,7 +163,7 @@ async function main(): Promise<void> {
   }
   if (values.attach && Object.keys(selectedEfforts).length) throw new Error('Use the in-app model selector to change effort for an attached session');
   if (values.attach && Object.values(selectedModels).some(model => model !== undefined)) throw new Error('Model overrides require --resume or a new session; --attach uses the running worker’s saved models');
-  const stateDir = resolve(values['state-dir'] ?? join(process.env.XDG_STATE_HOME ?? join(homedir(), '.local', 'state'), 'agent-duet'));
+  const stateDir = resolve(values['state-dir'] ?? join(process.env.XDG_STATE_HOME ?? join(homedir(), '.local', 'state'), 'agent-choir'));
   if (values.attach) {
     const remote = await connectController(stateDir, values.attach);
     remote.detach = async () => remote.disconnect();
@@ -177,7 +177,7 @@ async function main(): Promise<void> {
   if (values.clean || values['clean-all']) { try { await cleanSessions(store, stateDir, values.clean); } finally { store.close(); } return; }
   if (values.list) { try { console.log(values.json ? JSON.stringify(store.list(), null, 2) : store.list().map(s => `${s.id}  ${s.status.padEnd(12)} ${s.demo ? 'demo' : s.scope === 'build' ? 'edits enabled' : 'read-only'}  ${terminalText(s.brief).replace(/\n/g, ' ').slice(0, 70)}\n    ${terminalText(s.project)}`).join('\n') || 'No saved sessions.'); } finally { store.close(); } return; }
   let release: (() => void) | undefined;
-  let controller: DuetController | undefined;
+  let controller: ChoirController | undefined;
   let server: Awaited<ReturnType<typeof serveController>> | undefined;
   let detachedNotice: string | undefined;
   const cleanup = async () => { await server?.close(); await controller?.close(); release?.(); store.close(); };
@@ -218,7 +218,7 @@ async function main(): Promise<void> {
       const native = agent.provider === 'claude' ? new ClaudeProvider(options) : new CodexProvider(options);
       return { id: agent.id, run: native.run.bind(native), dispose: native.dispose.bind(native), listModels: native.listModels.bind(native) };
     };
-    controller = new DuetController(session, Object.fromEntries(sessionAgents(session).map(agent => [agent.id, factory(agent)])), store, new GitWorkspaceManager(stateDir), factory, new ContextMemory(stateDir));
+    controller = new ChoirController(session, Object.fromEntries(sessionAgents(session).map(agent => [agent.id, factory(agent)])), store, new GitWorkspaceManager(stateDir), factory, new ContextMemory(stateDir));
     if (values.adopt) {
       const before = controller.getView().session.messages.length;
       await controller.adoptIntegration(values.keep === true);
@@ -259,7 +259,7 @@ async function main(): Promise<void> {
       if (values['worker-start'] && !session.decisions.some(d => d.status === 'waiting_user') && !session.integration) await controller.start();
       await new Promise<void>(() => {}); // The socket serves paused/completed sessions until explicitly stopped.
     } else if (values.headless || !process.stdout.isTTY) {
-      if (!values.headless) console.error('Agent Duet: output is not an interactive terminal; running headless and exiting at completion. Run in an interactive terminal for the split view, or use --headless explicitly.');
+      if (!values.headless) console.error('Agent Choir: output is not an interactive terminal; running headless and exiting at completion. Run in an interactive terminal for the split view, or use --headless explicitly.');
       let shown = 0;
       const print = () => {
         const view = controller!.getView();
@@ -286,4 +286,4 @@ async function main(): Promise<void> {
     }
   } finally { await cleanup(); process.stdin.pause(); }
 }
-main().catch(error => { console.error(`Agent Duet: ${terminalText(error instanceof Error ? error.message : String(error))}`); process.exitCode = 1; });
+main().catch(error => { console.error(`Agent Choir: ${terminalText(error instanceof Error ? error.message : String(error))}`); process.exitCode = 1; });
