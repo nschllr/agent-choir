@@ -1,9 +1,20 @@
 # Agent Choir
 
+> [!NOTE]
+> **Developer note:** I mainly use Agent Choir to brainstorm complex problems and
+> ideas. The two agents (here GPT and Claude) have different strengths and
+> complement each other remarkably well.
+
+**TL;DR**
+
+- Chat with each agent independently
+- Send the same prompt to both and get independent answers
+- Let both agents collaborate on a task
+- The chat history is shared between agents when you start collaborating
+
 A local terminal workspace for one or two coding agents (Codex and/or Claude) on
 the same project. Chat with one agent, add a peer, and let them discuss, agree on
-a plan and implement it as equals. You settle disagreements. The coordinator is
-ordinary code, not a third model. Linux only for now.
+a plan and implement it as equals. You settle disagreements. 
 
 ![Codex and Claude side by side: Codex writes and runs a small script, then Claude assesses it when asked to discuss improvements](agent-choir-01.png)
 
