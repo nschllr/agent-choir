@@ -159,9 +159,9 @@ and `--codex-effort LEVEL` set saved defaults for instances of that provider;
 agent-choir --agent codex --codex-model MODEL_ID --codex-effort high
 ```
 
-For the inexpensive model used in the live smoke test, pin
-`--claude-model claude-haiku-4-5-20251001`. The six-turn real discussion completed
-automatically; see [observed results and remaining checks](testing.md#observed-live-smoke-test--2026-10-06).
+For inexpensive Claude test turns, pin
+`--claude-model claude-haiku-4-5-20251001`; see the
+[real-provider acceptance exercise](testing.md#real-provider-acceptance-exercise).
 
 Direct editing works in ordinary folders and dirty repositories and writes to the
 original project; the harness does not auto-commit these edits. Collaborative build
