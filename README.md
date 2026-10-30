@@ -1,24 +1,17 @@
 # Agent Choir
 
-A local terminal workspace that starts with one agent and adds a second when you
-want a peer. Choose Codex or Claude for each pane, including two instances of the
-same provider. Agents brainstorm, make explicit decisions, and work on the same
-project as equal peers. Discuss, plan, and implement in one session; use `--read-only`
-when you want to prevent edits. You settle unresolved decisions. The coordinator is
-ordinary software, not a third model judging their conversation.
+A local terminal workspace for one or two coding agents (Codex and/or Claude) on
+the same project. Chat with one agent, add a peer, and let them discuss, agree on
+a plan and implement it as equals. You settle disagreements. The coordinator is
+ordinary code, not a third model. Linux only for now.
 
 ![Codex and Claude side by side: Codex writes and runs a small script, then Claude assesses it when asked to discuss improvements](agent-choir-01.png)
 
 ![Collaboration mode: the agents converge on improvements, flag a remaining disagreement for the user, and wait for the next message](agent-choir-03.png)
 
-This is an initial implementation for Linux. Real Claude/Codex smoke tests have
-completed an autonomous discussion and a small build with shared task dependencies.
-The offline demonstration and automated tests use scripted providers. See
-[testing evidence and remaining checks](docs/testing.md) for the limits of these tests.
+## Try the offline demo
 
-## Try the offline demonstration
-
-Requires Node.js 24 or newer and npm. From the checked-out project directory:
+Needs Node.js 24+. Makes no model calls and edits nothing.
 
 ```sh
 npm ci
@@ -26,81 +19,46 @@ npm run build
 npm run demo
 ```
 
-The demonstration shows two panes, automatic discussion, and structured agreement.
-It uses deterministic scripts, makes no model calls, consumes no subscriptions,
-and never edits the selected project. `node dist/cli.js --demo --headless --json`
-prints the final state without a terminal UI.
+## Use real agents
 
-There is no published npm package yet. Invoke `node dist/cli.js` after building,
-or use `npm run dev --` during development. Examples using `agent-choir` assume you
-have made that executable available yourself.
-
-## Quick start with native agents
-
-Install Git and the native CLIs you intend to use,
-[Codex CLI](https://learn.chatgpt.com/docs/codex/cli) and
-[Claude Code](https://code.claude.com/docs/en/setup), and sign in through them
-with your existing subscription accounts:
+Install [Codex CLI](https://learn.chatgpt.com/docs/codex/cli) and/or
+[Claude Code](https://code.claude.com/docs/en/setup) and sign in with your subscription.
+Agent Choir runs those CLIs as they are; it never handles credentials or uses API billing.
 
 ```sh
 codex login
 claude
 node dist/cli.js --doctor
-```
 
-Agent Choir starts the unmodified native programs and resumes their native sessions.
-It never brokers credentials or calls model APIs directly; it refuses API-key and
-alternate-provider environments rather than falling back to API billing. Claude
-project-mode writes need the native Bash sandbox (`bwrap` and `socat`).
-
-```sh
-node dist/cli.js                                  # empty Codex chat in the current directory
-node dist/cli.js --agent claude --read-only       # Claude, no project edits
+node dist/cli.js                              # Codex chat in the current directory
+node dist/cli.js --agent claude --read-only   # Claude, no edits
 node dist/cli.js --project /path/to/repo --peer claude --collaborate \
-  "Implement user search and verify the result against the existing tests."
+  "Implement user search and verify it against the existing tests."
 ```
 
-## A session in brief
+No npm package yet; use `node dist/cli.js` or `npm run dev --`.
 
-- **Chat** with one agent. Press **Ctrl+N** to add a peer; **Tab** picks the recipient.
-- **Ctrl+B** toggles collaboration. Agents then exchange messages automatically,
-  propose versioned plans, and must each explicitly accept the same version before
-  any implementation task starts. Unresolved disagreements escalate to you.
-- **Implementation** happens in isolated Git worktrees from a private snapshot of
-  your checkout. One peer integrates and validates, the other reviews. Your branch
-  is never touched.
-- **`/adopt`** applies the accepted result to your checkout as uncommitted changes
-  and removes the session's branches and worktrees. Review and commit as usual.
-  `--clean-all` tidies sessions you never adopted.
-- **Ctrl+L** sets permissions (read-only, project, full), **Ctrl+R** sets each
-  pane's model and effort, **Ctrl+P** pauses, `/detach` runs in the background.
+## How a session works
 
-The [guide](docs/guide.md) covers every control, command, and flag, including
-permissions, model selection, decisions, integration, limits, background workers,
-and the `--native-log` diagnostics switch.
+- **Ctrl+N** adds a peer, **Tab** picks who you're talking to.
+- **Ctrl+B** turns on collaboration: agents talk to each other and must accept the
+  same plan version before any code is written. Unresolved disagreements come to you.
+- Implementation runs in isolated Git worktrees. One agent integrates, the other
+  reviews. Your branch is never touched.
+- **`/adopt`** applies the result to your checkout as uncommitted changes.
+- **Ctrl+L** permissions, **Ctrl+R** model, **Ctrl+P** pause, `/detach` background.
 
-## Documentation
+## Docs
 
-- [Guide](docs/guide.md): complete usage reference.
-- [Architecture](docs/architecture.md): module boundaries, protocol, workspace
-  lifecycle, persistence, and the limits of what the coordinator proves.
-- [Testing](docs/testing.md): automated coverage, offline smoke test, and the
-  separate real-provider acceptance exercise.
+- [Guide](docs/guide.md): all keys, commands and flags
+- [Architecture](docs/architecture.md): how it works
+- [Testing](docs/testing.md): test suite and manual checks
 
-## Development and provenance
+## Development
 
 ```sh
-npm run check
+npm run check   # typecheck, build, tests
 ```
 
-This typechecks, builds, and runs offline unit/integration tests. See
-[testing](docs/testing.md) for coverage, an offline smoke test, and the separate
-real-provider acceptance exercise.
-
-Original Agent Choir source is MIT licensed. No source from another harness was
-copied.
-The `.agent/` layout and separation of durable facts, environment knowledge,
-decisions, tasks, and handoffs were informed by
-[shared-agent-memory](https://github.com/nschllr/shared-agent-memory).
-No source or instruction text was copied from that repository.
-Dependencies retain their own licenses.
+MIT licensed. The `.agent/` memory layout was informed by
+[shared-agent-memory](https://github.com/nschllr/shared-agent-memory); no code was copied.
